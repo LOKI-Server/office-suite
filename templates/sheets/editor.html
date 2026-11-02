@@ -45,18 +45,41 @@
         <button type="button" data-cmd="addRows">Add 100 rows at the bottom</button>
       </div>
     </details>
+    <details class="menu">
+      <summary class="menu-label">Data</summary>
+      <div class="menu-panel menu-left">
+        <button type="button" data-cmd="sortAsc" title="Sorts the selected rows, or every row below the frozen ones">Sort A → Z by this column</button>
+        <button type="button" data-cmd="sortDesc">Sort Z → A by this column</button>
+        <hr>
+        <button type="button" data-cmd="filter">Filter by this column…</button>
+        <hr>
+        <button type="button" data-cmd="freezeRows">Freeze rows up to here</button>
+        <button type="button" data-cmd="freezeCols">Freeze columns up to here</button>
+        <button type="button" data-cmd="unfreeze">Unfreeze</button>
+        <hr>
+        <button type="button" data-cmd="fillDown" title="Ctrl+D">Fill down</button>
+        <button type="button" data-cmd="fillRight" title="Ctrl+R">Fill right</button>
+      </div>
+    </details>
   </div>
   <div class="tool-spacer"></div>
   <div class="tool-group">
     <label class="btn subtle file-button" title="Load a CSV file into this spreadsheet">Import CSV<input type="file" id="import-csv" accept=".csv,text/csv,.tsv,text/tab-separated-values" hidden></label>
     <a class="btn subtle" href="/sheets/{{ id }}/view" title="Read-only view for printing">Print view</a>
-    <a class="btn subtle" href="/sheets/{{ id }}/export.csv">Download CSV</a>
+    <a class="btn subtle" id="export-csv" href="/sheets/{{ id }}/export.csv">Download CSV</a>
+    <a class="btn subtle" href="/files/{{ id }}/versions">Version history</a>
   </div>
 </div>
 <div class="formula-bar">
   <span id="cell-name" class="cell-name" aria-live="polite">A1</span>
   <span class="fx" aria-hidden="true">fx</span>
   <input id="formula" class="formula-input" aria-label="Cell contents" autocomplete="off" spellcheck="false">
+</div>
+<div id="filter-bar" class="filter-bar" hidden>
+  <label for="filter-query">Show rows where column <strong id="filter-col">A</strong> contains</label>
+  <input id="filter-query" type="search" autocomplete="off" spellcheck="false">
+  <span id="filter-count" class="muted"></span>
+  <button type="button" id="filter-clear" class="subtle">Clear filter</button>
 </div>
 <div id="conflict" class="banner" role="alert" hidden>
   <span class="grow" id="conflict-text">This spreadsheet was changed somewhere else.</span>
@@ -66,7 +89,23 @@
 <div id="grid-wrap" class="grid-wrap" tabindex="-1">
   <table id="grid" class="grid" role="grid" aria-label="Spreadsheet"></table>
   <textarea id="cell-editor" class="cell-editor" aria-label="Edit cell" spellcheck="false" hidden></textarea>
+  <div id="fill-handle" class="fill-handle" title="Drag to fill" hidden></div>
 </div>
+<nav class="tab-bar" aria-label="Tabs">
+  <button type="button" id="tab-add" class="tab-add subtle" title="Add a tab" aria-label="Add a tab">+</button>
+  <div id="tabs" class="tabs" role="tablist"></div>
+  <details class="menu tab-menu">
+    <summary aria-label="Tab actions" title="Tab actions">{% include "icons/more.svg" %}</summary>
+    <div class="menu-panel menu-up">
+      <button type="button" data-tab="rename">Rename tab…</button>
+      <button type="button" data-tab="duplicate">Duplicate tab</button>
+      <button type="button" data-tab="left">Move left</button>
+      <button type="button" data-tab="right">Move right</button>
+      <hr>
+      <button type="button" data-tab="delete" class="danger">Delete tab</button>
+    </div>
+  </details>
+</nav>
 <footer class="statusbar"><span id="selection-stats"></span><span class="muted">Saved automatically · Ctrl+S saves now</span></footer>
 <script id="doc-data" type="application/json">{{ data|safe }}</script>
 {% endblock %}

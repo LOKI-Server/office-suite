@@ -9,6 +9,8 @@ use crate::ui::Tool;
 use handlers::*;
 use loki_sdk::Router;
 
+pub use handlers::{content, show};
+
 pub static SHEETS: Tool = Tool {
     name: "Sheets",
     href: "/sheets",

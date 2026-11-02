@@ -1,15 +1,18 @@
 //! Docs pages and autosave. Listing, trash and file actions are shared in
 //! [`crate::files`].
-use super::model::Document;
+use super::model::{Document, IMAGE_TYPES, check_image_name};
 use super::render;
-use crate::files::{self, Content, Kind, Stored, owner};
+use crate::files::{self, Content, Kind, Showing, Stored, VersionItem, owner};
 use crate::ui::{Shell, now_ms, page, script_json};
 use askama::Template;
-use loki_sdk::{Request, Response, Result};
+use loki_sdk::{Error, Request, Response, Result, StoredFile};
 use serde::{Deserialize, Serialize};
 
 const EMPTY_BODY: &str = r#"{"blocks":[]}"#;
 const EXCERPT_CHARS: usize = 160;
+const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
+/// Where pages find a document's images.
+const IMAGES: &str = "/docs/images/";
 
 fn shell(request: &Request) -> Result<Shell> {
     Shell::new(request, Some(&super::DOCS))
@@ -37,6 +40,8 @@ struct ViewPage {
     title: String,
     body: String,
     detail: String,
+    /// Set when showing an earlier version.
+    version: Option<VersionItem>,
 }
 
 pub fn home(request: Request) -> Result<Response> {
@@ -92,32 +97,41 @@ pub fn save(mut request: Request) -> Result<Response> {
 }
 
 pub fn save_document(owner: &str, id: &str, payload: SaveRequest, now: i64) -> Result<Response> {
-    let mut body = payload.body;
+    let content = content(payload.body)?;
+    files::save(owner, id, Kind::Doc, payload.version, &payload.title, content, now)
+}
+
+/// Validates a document and summarizes it for lists and search.
+pub fn content(mut body: Document) -> Result<Content> {
     body.validate()?;
     body.normalize();
-    let content = Content {
+    Ok(Content {
         body: serde_json::to_string(&body)?,
         excerpt: body.excerpt(EXCERPT_CHARS),
         info: words(body.word_count()),
         plain: body.plain_text(),
-    };
-    files::save(owner, id, Kind::Doc, payload.version, &payload.title, content, now)
+    })
 }
 
 pub fn view(request: Request) -> Result<Response> {
-    let stored = load(&request)?;
+    show(&request, load(&request)?.showing())
+}
+
+/// The read-only page, for the document now or an earlier version.
+pub fn show(request: &Request, showing: Showing) -> Result<Response> {
     page(Response::render(ViewPage {
-        shell: shell(&request)?,
-        body: render::to_html(&stored.body()?),
-        detail: stored.detail(),
-        id: stored.id,
-        title: stored.title,
+        shell: shell(request)?,
+        body: render::to_html(&showing.body()?, IMAGES),
+        detail: showing.detail,
+        id: showing.id,
+        title: showing.title,
+        version: showing.version,
     })?)
 }
 
 pub fn export_markdown(request: Request) -> Result<Response> {
     let stored = load(&request)?;
-    let markdown = render::to_markdown(&stored.title, &stored.body()?);
+    let markdown = render::to_markdown(&stored.title, &stored.body()?, &absolute_images(&request));
     files::attachment(
         Response::text(markdown).header("content-type", "text/markdown; charset=utf-8")?,
         &stored.title,
@@ -127,12 +141,54 @@ pub fn export_markdown(request: Request) -> Result<Response> {
 
 pub fn export_html(request: Request) -> Result<Response> {
     let stored = load(&request)?;
-    let html = render::to_html_file(&stored.title, &stored.body()?);
+    let html = render::to_html_file(&stored.title, &stored.body()?, &absolute_images(&request));
     files::attachment(
         Response::html(html).header("content-security-policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")?,
         &stored.title,
         "html",
     )
+}
+
+/// Exported files link to images on this server; opening them needs a sign-in.
+fn absolute_images(request: &Request) -> String {
+    format!("{}{IMAGES}", request.context().origin.trim_end_matches('/'))
+}
+
+/// Each person's images live in their own upload folder, so a name only ever
+/// finds the signed-in person's image.
+fn image_path(owner: &str, name: &str) -> String {
+    format!("images/{owner}/{name}")
+}
+
+/// `POST /docs/images`: a multipart upload with a `file` field. Answers
+/// `{"src": NAME}` for the editor to place in the document.
+pub fn upload_image(request: Request) -> Result<Response> {
+    let owner = owner(&request)?;
+    let form = request.form()?;
+    let upload = form.required_file("file")?;
+    let extension = IMAGE_TYPES
+        .iter()
+        .find(|(kind, _)| *kind == upload.content_type)
+        .map(|(_, ext)| *ext)
+        .ok_or_else(|| Error::new(415, "Only PNG, JPEG, GIF and WebP images can be added."))?;
+    if upload.size > MAX_IMAGE_BYTES {
+        return Err(Error::new(413, "Images can be at most 5 MB."));
+    }
+    let name = format!("{}.{extension}", loki_sdk::random_id());
+    upload.retain(image_path(&owner, &name))?;
+    #[derive(Serialize)]
+    struct Uploaded {
+        src: String,
+    }
+    Response::json(&Uploaded { src: name })
+}
+
+/// `GET /docs/images/{name}`: one of the signed-in person's images.
+pub fn image(request: Request) -> Result<Response> {
+    let owner = owner(&request)?;
+    let name = request.param("name")?;
+    check_image_name(name).map_err(|_| Error::not_found("No such image."))?;
+    StoredFile::at(image_path(&owner, name)).inline(name)
 }
 
 #[cfg(test)]
@@ -156,7 +212,7 @@ mod tests {
         let (log, fake) = host(|_| json!({"rows": [], "affected": 1}));
         let response = testing::with_host(fake, || save_document("user-1", "doc-1", payload(4), 99).unwrap());
         assert_eq!(response.status, 200);
-        let params = log.borrow()[0]["params"].clone();
+        let params = log.borrow()[1]["params"].clone();
         assert_eq!(params[1], "Hello world");
         assert_eq!(params[2], "2 words");
         assert_eq!(params[4], r#"{"blocks":[{"type":"paragraph","runs":[{"text":"Hello world"}]}]}"#);

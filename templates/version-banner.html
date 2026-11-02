@@ -1,0 +1,10 @@
+{% if let Some(version) = version %}
+<div class="banner version-banner">
+  <span class="grow">You're looking at the version saved <time data-ms="{{ version.saved_at }}">{{ version.when|lower }}</time>.</span>
+  <a class="btn" href="/files/{{ id }}/versions">All versions</a>
+  <form method="post" action="/files/{{ id }}/versions/{{ version.id }}/restore" data-confirm="Restore this version? The current one is kept in the history.">
+    <input type="hidden" name="csrf_token" value="{{ shell.csrf }}">
+    <button class="primary">Restore this version</button>
+  </form>
+</div>
+{% endif %}

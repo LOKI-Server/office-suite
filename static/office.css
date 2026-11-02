@@ -266,3 +266,8 @@ input[type=text], input[type=search], input:not([type]), select {
   .editor-page, .view-page { display: block; height: auto; overflow: visible; }
   .toolbar, .statusbar, .view-actions, .banner { display: none !important; }
 }
+
+/* Version history */
+.item.current .item-title { color: var(--accent); }
+.version-banner { background: var(--accent-soft); }
+.version-banner form { margin: 0; }

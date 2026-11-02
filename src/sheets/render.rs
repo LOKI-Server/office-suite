@@ -3,6 +3,7 @@
 //! browser.
 use super::model::{Align, Cell, CellValue, NumFmt, Sheet, col_name};
 
+
 /// A number as the spreadsheet shows it without a format: at most 12
 /// significant digits, so 0.1 + 0.2 shows as 0.3.
 pub fn general(n: f64) -> String {
@@ -106,6 +107,26 @@ pub fn classes(cell: &Cell) -> String {
     classes.join(" ")
 }
 
+/// Rows `0..rows` that the tab's filter shows: the header rows (the frozen
+/// rows, or else the first row) always, others when the filter column's shown
+/// text contains the query, ignoring case. Matches `static/sheet.js`.
+pub fn shown_rows(sheet: &Sheet, rows: u32) -> Vec<u32> {
+    let Some(filter) = &sheet.filter else {
+        return (0..rows).collect();
+    };
+    let header = sheet.frozen_rows.max(1);
+    let query = filter.query.to_lowercase();
+    (0..rows)
+        .filter(|&row| {
+            row < header
+                || sheet
+                    .cells
+                    .get(&format!("{}{}", col_name(filter.col), row + 1))
+                    .is_some_and(|cell| display(cell).to_lowercase().contains(&query))
+        })
+        .collect()
+}
+
 /// The used part of the spreadsheet as CSV, one line per row, values unformatted.
 pub fn to_csv(sheet: &Sheet) -> String {
     let (rows, cols) = sheet.used_size();
@@ -191,5 +212,17 @@ mod tests {
         assert_eq!(classes(&cell), "align-right bold");
         let error: Cell = serde_json::from_value(json!({"input": "=x", "value": {"error": "#NAME?"}, "align": "left"})).unwrap();
         assert_eq!(classes(&error), "error");
+    }
+
+    #[test]
+    fn filters_keep_header_rows() {
+        let sheet: Sheet = serde_json::from_value(json!({"filter": {"col": 1, "query": "REN"}, "cells": {
+            "B1": {"input": "Item", "value": "Item"},
+            "B2": {"input": "Rent", "value": "Rent"},
+            "B3": {"input": "Food", "value": "Food"},
+            "B4": {"input": "Current", "value": "Current"}
+        }}))
+        .unwrap();
+        assert_eq!(shown_rows(&sheet, 5), [0, 1, 3]);
     }
 }

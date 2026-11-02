@@ -8,6 +8,8 @@ use crate::ui::Tool;
 use handlers::*;
 use loki_sdk::Router;
 
+pub use handlers::{content, show};
+
 pub static DOCS: Tool = Tool {
     name: "Docs",
     href: "/docs",
@@ -22,6 +24,8 @@ pub fn routes(router: Router) -> Router {
     router
         .get("/docs", home)
         .post("/docs/new", create)
+        .post("/docs/images", upload_image)
+        .get("/docs/images/{name}", image)
         .get("/docs/{id}", editor)
         .get("/docs/{id}/view", view)
         .get("/docs/{id}/export.md", export_markdown)

@@ -137,3 +137,65 @@ test("names", () => {
   assert.deepEqual(F.parseKey("AZ12"), { col: 51, row: 11 });
   assert.equal(F.parseKey("A0"), null);
 });
+
+// Evaluates a workbook given as {tabName: {A1: "input"}}.
+function book(tabs) {
+  const list = Object.entries(tabs).map(([name, inputs]) => ({
+    name, rows: 100, cols: 26, cells: new Map(Object.entries(inputs).map(([k, input]) => [k, { input }])),
+  }));
+  return F.computeBook(list).map((values) => Object.fromEntries(values));
+}
+
+test("references to other tabs", () => {
+  const [main, other] = book({
+    Main: { A1: "=Data!A1*2", A2: "=SUM('Q1 data'!A1:A2)", A3: "=Missing!A1", A4: "=data!A1", A5: "=Data!A1:B1" },
+    Data: { A1: "21", B1: "=Main!A1+1" },
+    "Q1 data": { A1: "1", A2: "2" },
+  });
+  assert.equal(main.A1, 42);
+  assert.equal(main.A2, 3);
+  assert.deepEqual(main.A3, { error: "#REF!" });
+  assert.equal(main.A4, 21);
+  assert.deepEqual(main.A5, { error: "#VALUE!" });
+  assert.equal(other.B1, 43);
+  const [cycle] = book({ A: { A1: "=B!A1" }, B: { A1: "=A!A1" } });
+  assert.deepEqual(cycle.A1, { error: "#CYCLE!" });
+  const [mixed] = book({ A: { A1: "=SUM(B!A1:C!A2)" }, B: {}, C: {} });
+  assert.deepEqual(mixed.A1, { error: "#REF!" });
+});
+
+test("row changes on one tab only move references to it", () => {
+  const onData = { home: "Main", name: "Data" };
+  assert.equal(F.insertShift("=A5+Data!A5+Other!A5", "row", 1, 2, onData), "=A5+Data!A7+Other!A5");
+  const onMain = { home: "Main", name: "Main" };
+  assert.equal(F.insertShift("=A5+Data!A5", "row", 1, 2, onMain), "=A7+Data!A5");
+  assert.equal(F.deleteShift("=SUM(Data!A1:A9)+A3", "row", 0, 2, onData), "=SUM(Data!A1:A7)+A3");
+  assert.equal(F.deleteShift("='Q1 data'!B2", "row", 1, 1, { home: "Main", name: "q1 DATA" }), "=#REF!");
+});
+
+test("renaming and deleting tabs", () => {
+  assert.equal(F.renameSheet("=Data!A1+data!B2:C3+A1", "Data", "Q1 data"), "='Q1 data'!A1+'Q1 data'!B2:C3+A1");
+  assert.equal(F.renameSheet("='Q1 data'!A1", "Q1 data", "Totals"), "=Totals!A1");
+  assert.equal(F.renameSheet("=x!A1", "x", "Q2"), "='Q2'!A1");
+  assert.equal(F.dropSheet("=Data!A1+SUM(Data!A1:A2)+B1", "data"), "=#REF!+SUM(#REF!)+B1");
+});
+
+test("unchanged references keep their text", () => {
+  assert.equal(F.insertShift("=a1+sum(b1:b2)", "row", 50, 1), "=a1+sum(b1:b2)");
+});
+
+test("pointing at cells", () => {
+  assert.equal(F.pointText("Main", "Main", 1, 2), "B3");
+  assert.equal(F.pointText("Q1 data", "Main", 0, 0), "'Q1 data'!A1");
+  assert.equal(F.pointText("Data", "Main", 0, 0), "Data!A1");
+  assert.equal(F.quoteSheet("A1"), "'A1'");
+});
+
+test("sort order", () => {
+  const values = ["b", 10, null, true, "A", 2, { error: "#N/A" }, "item 10", "item 9", ""];
+  const up = [...values].sort((a, b) => F.sortCompare(a, b, false));
+  assert.deepEqual(up.slice(0, 7), [2, 10, "A", "b", "item 9", "item 10", true]);
+  const down = [...values].sort((a, b) => F.sortCompare(a, b, true));
+  assert.deepEqual(down.slice(0, 3), [{ error: "#N/A" }, true, "item 10"]);
+  assert.ok([null, ""].includes(down[8]) && [null, ""].includes(down[9]));
+});

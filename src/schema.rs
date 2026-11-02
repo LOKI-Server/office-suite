@@ -20,6 +20,19 @@ const STATEMENTS: &[&str] = &[
         body TEXT NOT NULL
     )",
     "CREATE INDEX IF NOT EXISTS files_by_owner ON files(owner, trashed_at, updated_at)",
+    // Earlier contents of files, kept by `files::save` and before a restore.
+    // `saved_at` is when that content was saved, `created_at` when it was kept.
+    "CREATE TABLE IF NOT EXISTS file_versions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        owner TEXT NOT NULL,
+        title TEXT NOT NULL,
+        info TEXT NOT NULL DEFAULT '',
+        saved_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        body TEXT NOT NULL
+    )",
+    "CREATE INDEX IF NOT EXISTS file_versions_by_file ON file_versions(file_id, id)",
     // Docs 0.1 kept documents in a table of their own: move any into `files`.
     "CREATE TABLE IF NOT EXISTS documents(
         id TEXT PRIMARY KEY,

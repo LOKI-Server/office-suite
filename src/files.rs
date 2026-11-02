@@ -7,7 +7,7 @@
 use crate::ui::{Shell, Tool, now_ms, page, relative_time};
 use crate::{docs, sheets};
 use askama::Template;
-use loki_sdk::{Database, Error, Request, Response, Result, params};
+use loki_sdk::{Database, Error, Request, Response, Result, Statement, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
@@ -20,6 +20,13 @@ pub const MAX_TITLE_CHARS: usize = 200;
 pub const MAX_SAVE_BYTES: usize = 2 * 1024 * 1024;
 /// LOKI stores at most 1 MiB per database value.
 const MAX_STORED_BYTES: usize = 900 * 1024;
+/// While someone edits, the content being replaced is kept as a version when
+/// the newest version is at least this old.
+const VERSION_EVERY_MS: i64 = 10 * 60_000;
+/// A file keeps at most this many versions…
+const MAX_VERSIONS: i64 = 30;
+/// …and drops its oldest once together they pass this size.
+const MAX_VERSION_BYTES: i64 = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -38,6 +45,20 @@ impl Kind {
         match self {
             Kind::Doc => "doc",
             Kind::Sheet => "sheet",
+        }
+    }
+    /// Validates a stored body and summarizes it, as saving does.
+    fn content(self, body: &str) -> Result<Content> {
+        match self {
+            Kind::Doc => docs::content(serde_json::from_str(body)?),
+            Kind::Sheet => sheets::content(serde_json::from_str(body)?),
+        }
+    }
+    /// The tool's read-only page.
+    fn show(self, request: &Request, showing: Showing) -> Result<Response> {
+        match self {
+            Kind::Doc => docs::show(request, showing),
+            Kind::Sheet => sheets::show(request, showing),
         }
     }
 }
@@ -153,12 +174,46 @@ pub fn list(owner: &str, kind: Option<Kind>, query: &str, limit: i64) -> Result<
     Ok(rows.into_iter().map(|r| Row::new(r, now)).collect())
 }
 
+/// Deletes the owner's files matching `filter` (SQL over `files`, after
+/// `owner=?`) together with their versions, returning how many files went.
+fn delete_files(owner: &str, filter: &str, values: Vec<Value>) -> Result<u64> {
+    let mut all: Vec<Value> = vec![owner.into()];
+    all.extend(values);
+    let results = Database.transaction(&[
+        Statement::new(
+            format!("DELETE FROM file_versions WHERE file_id IN (SELECT id FROM files WHERE owner=? AND {filter})"),
+            &all,
+        )?,
+        Statement::new(format!("DELETE FROM files WHERE owner=? AND {filter}"), &all)?,
+    ])?;
+    Ok(results.get(1).map_or(0, |r| r.affected))
+}
+
 fn purge_expired(owner: &str, now: i64) -> Result<()> {
-    Database.execute(
-        "DELETE FROM files WHERE owner=? AND trashed_at IS NOT NULL AND trashed_at<?",
-        params![owner, now - TRASH_DAYS * DAY_MS],
+    delete_files(
+        owner,
+        "trashed_at IS NOT NULL AND trashed_at<?",
+        vec![(now - TRASH_DAYS * DAY_MS).into()],
     )?;
     Ok(())
+}
+
+/// Copies a file's current content into its versions; callers append conditions.
+const KEEP_VERSION: &str = "INSERT INTO file_versions(file_id,owner,title,info,saved_at,created_at,body)
+     SELECT id,owner,title,info,updated_at,?,body FROM files WHERE id=? AND owner=?";
+
+/// Drops a file's oldest versions beyond the count and size limits.
+fn prune_versions(id: &str) -> Result<Statement> {
+    Statement::new(
+        "DELETE FROM file_versions WHERE id IN (
+           SELECT id FROM (
+             SELECT id,
+                    ROW_NUMBER() OVER (ORDER BY id DESC) AS n,
+                    SUM(length(body)) OVER (ORDER BY id DESC) AS total
+             FROM file_versions WHERE file_id=?)
+           WHERE n>? OR total>?)",
+        params![id, MAX_VERSIONS, MAX_VERSION_BYTES],
+    )
 }
 
 /// Creates an empty file and returns its id.
@@ -223,23 +278,36 @@ pub fn save(owner: &str, id: &str, kind: Kind, version: i64, title: &str, conten
             format!("This {} is too large. Split it into several files.", kind.tool().noun),
         ));
     }
-    let affected = Database.execute(
-        "UPDATE files SET title=?,excerpt=?,info=?,plain=?,body=?,version=version+1,updated_at=?
-         WHERE id=? AND owner=? AND kind=? AND version=? AND trashed_at IS NULL",
-        params![
-            title,
-            content.excerpt,
-            content.info,
-            content.plain,
-            content.body,
-            now,
-            id,
-            owner,
-            kind.as_str(),
-            version
-        ],
-    )?;
-    if affected == 1 {
+    // One transaction: keep the content being replaced (unless a version was
+    // kept recently, or the file was never edited), save, then prune.
+    let results = Database.transaction(&[
+        Statement::new(
+            format!(
+                "{KEEP_VERSION} AND kind=? AND version=? AND trashed_at IS NULL
+                 AND NOT (version=1 AND created_at=updated_at)
+                 AND NOT EXISTS (SELECT 1 FROM file_versions WHERE file_id=? AND created_at>?)"
+            ),
+            params![now, id, owner, kind.as_str(), version, id, now - VERSION_EVERY_MS],
+        )?,
+        Statement::new(
+            "UPDATE files SET title=?,excerpt=?,info=?,plain=?,body=?,version=version+1,updated_at=?
+             WHERE id=? AND owner=? AND kind=? AND version=? AND trashed_at IS NULL",
+            params![
+                title,
+                content.excerpt,
+                content.info,
+                content.plain,
+                content.body,
+                now,
+                id,
+                owner,
+                kind.as_str(),
+                version
+            ],
+        )?,
+        prune_versions(id)?,
+    ])?;
+    if results.get(1).is_some_and(|r| r.affected == 1) {
         #[derive(Serialize)]
         struct Saved {
             version: i64,
@@ -380,33 +448,222 @@ pub fn move_to_trash(request: Request) -> Result<Response> {
 }
 
 pub fn restore(request: Request) -> Result<Response> {
-    in_trash(
-        &request,
+    let owner = owner(&request)?;
+    let affected = Database.execute(
         "UPDATE files SET trashed_at=NULL WHERE id=? AND owner=? AND trashed_at IS NOT NULL",
-    )
+        params![request.param("id")?, owner],
+    )?;
+    if affected == 0 {
+        return Err(not_found());
+    }
+    Response::redirect("/trash")
 }
 
 pub fn purge(request: Request) -> Result<Response> {
-    in_trash(
-        &request,
-        "DELETE FROM files WHERE id=? AND owner=? AND trashed_at IS NOT NULL",
-    )
-}
-
-fn in_trash(request: &Request, sql: &str) -> Result<Response> {
-    let owner = owner(request)?;
-    if Database.execute(sql, params![request.param("id")?, owner])? == 0 {
+    let owner = owner(&request)?;
+    let id = request.param("id")?;
+    if delete_files(&owner, "id=? AND trashed_at IS NOT NULL", vec![id.into()])? == 0 {
         return Err(not_found());
     }
     Response::redirect("/trash")
 }
 
 pub fn empty_trash(request: Request) -> Result<Response> {
-    Database.execute(
-        "DELETE FROM files WHERE owner=? AND trashed_at IS NOT NULL",
-        params![owner(&request)?],
-    )?;
+    delete_files(&owner(&request)?, "trashed_at IS NOT NULL", Vec::new())?;
     Response::redirect("/trash")
+}
+
+// ------------------------------------------------------------------ versions
+
+/// What a tool's read-only page shows: a file as it is now, or an earlier version.
+pub struct Showing {
+    pub id: String,
+    pub title: String,
+    pub detail: String,
+    body: String,
+    /// Set when showing an earlier version.
+    pub version: Option<VersionItem>,
+}
+impl Showing {
+    pub fn body<T: DeserializeOwned>(&self) -> Result<T> {
+        serde_json::from_str(&self.body)
+            .map_err(|e| Error::internal(format!("Stored file {} is unreadable: {e}", self.id)))
+    }
+}
+impl Stored {
+    pub fn showing(self) -> Showing {
+        Showing {
+            detail: self.detail(),
+            id: self.id,
+            title: self.title,
+            body: self.body,
+            version: None,
+        }
+    }
+}
+
+/// An earlier version in a list.
+pub struct VersionItem {
+    pub id: i64,
+    pub title: String,
+    pub info: String,
+    /// When the content was saved, in milliseconds, for the browser to show locally.
+    pub saved_at: i64,
+    /// The same, relative: "3 hours ago".
+    pub when: String,
+}
+
+#[derive(Deserialize)]
+struct VersionRow {
+    id: i64,
+    title: String,
+    info: String,
+    saved_at: i64,
+}
+impl VersionRow {
+    fn item(self, now: i64) -> VersionItem {
+        VersionItem {
+            when: relative_time(self.saved_at, now),
+            id: self.id,
+            title: self.title,
+            info: self.info,
+            saved_at: self.saved_at,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "versions.html")]
+struct VersionsPage {
+    shell: Shell,
+    id: String,
+    title: String,
+    href: String,
+    trashed: bool,
+    updated_at: i64,
+    updated: String,
+    info: String,
+    versions: Vec<VersionItem>,
+}
+
+/// `GET /files/{id}/versions`: the file now, then its earlier versions, newest first.
+pub fn versions(request: Request) -> Result<Response> {
+    let owner = owner(&request)?;
+    let id = request.param("id")?;
+    #[derive(Deserialize)]
+    struct Current {
+        kind: Kind,
+        title: String,
+        info: String,
+        updated_at: i64,
+        trashed_at: Option<i64>,
+    }
+    let current: Current = Database
+        .fetch_optional(
+            "SELECT kind,title,info,updated_at,trashed_at FROM files WHERE id=? AND owner=?",
+            params![id, owner],
+        )?
+        .ok_or_else(not_found)?;
+    let rows: Vec<VersionRow> = Database.fetch_all(
+        "SELECT id,title,info,saved_at FROM file_versions WHERE file_id=? AND owner=? ORDER BY id DESC",
+        params![id, owner],
+    )?;
+    let now = now_ms();
+    let tool = current.kind.tool();
+    page(Response::render(VersionsPage {
+        shell: Shell::new(&request, Some(tool))?,
+        href: format!("{}/{id}", tool.href),
+        id: id.into(),
+        title: current.title,
+        trashed: current.trashed_at.is_some(),
+        updated: relative_time(current.updated_at, now),
+        updated_at: current.updated_at,
+        info: current.info,
+        versions: rows.into_iter().map(|r| r.item(now)).collect(),
+    })?)
+}
+
+#[derive(Deserialize)]
+struct VersionContent {
+    id: i64,
+    title: String,
+    info: String,
+    saved_at: i64,
+    kind: Kind,
+    body: String,
+}
+fn load_version(request: &Request) -> Result<(String, String, VersionContent)> {
+    let owner = owner(request)?;
+    let id = request.param("id")?.to_string();
+    let version: i64 = request.param("version")?.parse().map_err(|_| not_found())?;
+    let found: VersionContent = Database
+        .fetch_optional(
+            "SELECT v.id,v.title,v.info,v.saved_at,f.kind,v.body FROM file_versions v
+             JOIN files f ON f.id=v.file_id AND f.owner=v.owner
+             WHERE v.id=? AND v.file_id=? AND v.owner=?",
+            params![version, id, owner],
+        )?
+        .ok_or_else(not_found)?;
+    Ok((owner, id, found))
+}
+
+/// `GET /files/{id}/versions/{version}`: an earlier version, read-only.
+pub fn show_version(request: Request) -> Result<Response> {
+    let (_, id, found) = load_version(&request)?;
+    let now = now_ms();
+    let kind = found.kind;
+    let item = VersionRow {
+        id: found.id,
+        title: found.title.clone(),
+        info: found.info.clone(),
+        saved_at: found.saved_at,
+    }
+    .item(now);
+    let detail = if found.info.is_empty() {
+        format!("Saved {}", item.when.to_lowercase())
+    } else {
+        format!("Saved {} · {}", item.when.to_lowercase(), found.info)
+    };
+    kind.show(
+        &request,
+        Showing {
+            id,
+            title: found.title,
+            detail,
+            body: found.body,
+            version: Some(item),
+        },
+    )
+}
+
+/// `POST /files/{id}/versions/{version}/restore`: makes an earlier version
+/// current, keeping the content it replaces as a version too.
+pub fn restore_version(request: Request) -> Result<Response> {
+    let (owner, id, found) = load_version(&request)?;
+    let content = found.kind.content(&found.body)?;
+    let now = now_ms();
+    let results = Database.transaction(&[
+        Statement::new(format!("{KEEP_VERSION} AND trashed_at IS NULL"), params![now, id, owner])?,
+        Statement::new(
+            "UPDATE files SET title=?,excerpt=?,info=?,plain=?,body=?,version=version+1,updated_at=?
+             WHERE id=? AND owner=? AND trashed_at IS NULL",
+            params![
+                found.title,
+                content.excerpt,
+                content.info,
+                content.plain,
+                content.body,
+                now,
+                id,
+                owner
+            ],
+        )?,
+        prune_versions(&id)?,
+    ])?;
+    if !results.get(1).is_some_and(|r| r.affected == 1) {
+        return Err(Error::new(409, "Restore this file from the trash first."));
+    }
+    Response::redirect(&format!("{}/{id}", found.kind.tool().href))
 }
 
 fn like_escape(text: &str) -> String {
@@ -471,11 +728,77 @@ mod tests {
         let body: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body, json!({"version": 5, "updated_at": 99, "title": "Report"}));
         let log = log.borrow();
-        assert_eq!(log.len(), 1);
-        assert!(log[0]["sql"].as_str().unwrap().contains("WHERE id=? AND owner=? AND kind=? AND version=?"));
-        let params = log[0]["params"].as_array().unwrap();
+        assert_eq!(log.len(), 3);
+        assert!(log[1]["sql"].as_str().unwrap().contains("WHERE id=? AND owner=? AND kind=? AND version=?"));
+        let params = log[1]["params"].as_array().unwrap();
         assert_eq!(params[0], "Report");
         assert_eq!(params[6..], [json!("f-1"), json!("user-1"), json!("doc"), json!(4)]);
+    }
+
+    #[test]
+    fn saving_keeps_the_replaced_content_at_most_every_ten_minutes() {
+        let (log, fake) = host(|_| json!({"rows": [], "affected": 1}));
+        let now = 1_000_000_000;
+        testing::with_host(fake, || save("user-1", "f-1", Kind::Doc, 4, "x", content(), now).unwrap());
+        let log = log.borrow();
+        let keep = log[0]["sql"].as_str().unwrap();
+        assert!(keep.starts_with("INSERT INTO file_versions"));
+        assert!(keep.contains("AND version=? AND trashed_at IS NULL"));
+        assert_eq!(
+            log[0]["params"],
+            json!([now, "f-1", "user-1", "doc", 4, "f-1", now - VERSION_EVERY_MS])
+        );
+        assert!(log[2]["sql"].as_str().unwrap().starts_with("DELETE FROM file_versions"));
+        assert_eq!(log[2]["params"], json!(["f-1", MAX_VERSIONS, MAX_VERSION_BYTES]));
+    }
+
+    #[test]
+    fn restoring_a_version_keeps_the_current_content_first() {
+        let (log, fake) = host(|sql| {
+            if sql.starts_with("SELECT v.id") {
+                json!({"rows": [{
+                    "id": 7, "title": "Old title", "info": "1 word", "saved_at": 5, "kind": "doc",
+                    "body": r#"{"blocks":[{"type":"paragraph","runs":[{"text":"Old"}]}]}"#
+                }], "affected": 0})
+            } else {
+                json!({"rows": [], "affected": 1})
+            }
+        });
+        let request = testing::request(Method::Post, "/files/f-1/versions/7/restore", context(true));
+        let response = testing::with_host(fake, || crate::router().handle(request).unwrap());
+        assert_eq!(response.headers["location"], "/docs/f-1");
+        let log = log.borrow();
+        assert_eq!(log[0]["params"], json!([7, "f-1", "user-1"]));
+        assert!(log[1]["sql"].as_str().unwrap().starts_with("INSERT INTO file_versions"));
+        assert_eq!(log[2]["params"][0], "Old title");
+        assert_eq!(log[2]["params"][3], "Old");
+        assert_eq!(log[2]["params"].as_array().unwrap()[6..], [json!("f-1"), json!("user-1")]);
+    }
+
+    #[test]
+    fn versions_of_someone_elses_file_are_not_found() {
+        for (method, path) in [
+            (Method::Get, "/files/f-1/versions"),
+            (Method::Get, "/files/f-1/versions/3"),
+            (Method::Post, "/files/f-1/versions/3/restore"),
+            (Method::Get, "/files/f-1/versions/not-a-number"),
+        ] {
+            let (_, fake) = host(|_| json!({"rows": [], "affected": 0}));
+            let request = testing::request(method, path, context(true));
+            let error = testing::with_host(fake, || crate::router().handle(request).unwrap_err());
+            assert_eq!(error.status(), 404, "{path}");
+        }
+    }
+
+    #[test]
+    fn deleting_files_deletes_their_versions() {
+        let (log, fake) = host(|_| json!({"rows": [], "affected": 1}));
+        let purge = testing::request(Method::Post, "/files/f-1/purge", context(true));
+        testing::with_host(fake, || crate::router().handle(purge).unwrap());
+        let log = log.borrow();
+        assert!(log[0]["sql"].as_str().unwrap().starts_with("DELETE FROM file_versions WHERE file_id IN"));
+        assert_eq!(log[0]["params"], json!(["user-1", "f-1"]));
+        assert!(log[1]["sql"].as_str().unwrap().starts_with("DELETE FROM files"));
     }
 
     #[test]

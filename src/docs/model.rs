@@ -5,6 +5,17 @@ use serde::{Deserialize, Serialize};
 pub const MAX_BLOCKS: usize = 5_000;
 pub const MAX_TEXT_BYTES: usize = 512 * 1024;
 pub const MAX_LINK_BYTES: usize = 2_048;
+/// List items nest up to this many levels below the first.
+pub const MAX_LIST_LEVEL: u8 = 5;
+pub const MAX_TABLE_ROWS: usize = 500;
+pub const MAX_TABLE_COLS: usize = 20;
+/// Image types Docs accepts, by file extension.
+pub const IMAGE_TYPES: &[(&str, &str)] = &[
+    ("image/png", "png"),
+    ("image/jpeg", "jpg"),
+    ("image/gif", "gif"),
+    ("image/webp", "webp"),
+];
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Document {
@@ -37,12 +48,56 @@ pub enum Block {
         text: String,
     },
     BulletList {
-        items: Vec<Vec<Run>>,
+        items: Vec<Item>,
     },
     OrderedList {
-        items: Vec<Vec<Run>>,
+        items: Vec<Item>,
     },
     Divider,
+    /// Rows of cells; with `header`, the first row is a heading row.
+    Table {
+        rows: Vec<Vec<Vec<Run>>>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        header: bool,
+    },
+    /// An uploaded image, by its file name (see [`check_image_name`]).
+    Image {
+        src: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        alt: String,
+    },
+}
+
+/// A list item; `level` is how deeply it is nested, from 0.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "StoredItem")]
+pub struct Item {
+    pub runs: Vec<Run>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub level: u8,
+}
+/// Documents saved before nested lists held items as plain run lists.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredItem {
+    Runs(Vec<Run>),
+    Item {
+        #[serde(default)]
+        runs: Vec<Run>,
+        #[serde(default)]
+        level: u8,
+    },
+}
+impl From<StoredItem> for Item {
+    fn from(stored: StoredItem) -> Self {
+        match stored {
+            StoredItem::Runs(runs) => Item { runs, level: 0 },
+            StoredItem::Item { runs, level } => Item { runs, level },
+        }
+    }
+}
+fn is_zero(n: &u8) -> bool {
+    *n == 0
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,9 +169,10 @@ impl Block {
                 vec![runs]
             }
             Block::BulletList { items } | Block::OrderedList { items } => {
-                items.iter().map(Vec::as_slice).collect()
+                items.iter().map(|item| item.runs.as_slice()).collect()
             }
-            Block::Code { .. } | Block::Divider => Vec::new(),
+            Block::Table { rows, .. } => rows.iter().flatten().map(Vec::as_slice).collect(),
+            Block::Code { .. } | Block::Divider | Block::Image { .. } => Vec::new(),
         }
     }
     fn runs_mut(&mut self) -> Vec<&mut Vec<Run>> {
@@ -124,15 +180,20 @@ impl Block {
             Block::Paragraph { runs, .. } | Block::Heading { runs, .. } | Block::Quote { runs } => {
                 vec![runs]
             }
-            Block::BulletList { items } | Block::OrderedList { items } => items.iter_mut().collect(),
-            Block::Code { .. } | Block::Divider => Vec::new(),
+            Block::BulletList { items } | Block::OrderedList { items } => {
+                items.iter_mut().map(|item| &mut item.runs).collect()
+            }
+            Block::Table { rows, .. } => rows.iter_mut().flatten().collect(),
+            Block::Code { .. } | Block::Divider | Block::Image { .. } => Vec::new(),
         }
     }
-    /// The block's text with marks dropped; list items and lines are joined by `\n`.
+    /// The block's text with marks dropped; list items, table cells and lines
+    /// are joined by `\n`.
     pub fn plain_text(&self) -> String {
         match self {
             Block::Code { text } => text.clone(),
             Block::Divider => String::new(),
+            Block::Image { alt, .. } => alt.clone(),
             _ => self
                 .runs()
                 .iter()
@@ -157,8 +218,36 @@ impl Document {
                 Block::Heading { level, .. } if !(1..=3).contains(level) => {
                     return Err("Headings must be level 1, 2 or 3.".into());
                 }
-                Block::BulletList { items } | Block::OrderedList { items } if items.is_empty() => {
-                    return Err("Lists need at least one item.".into());
+                Block::BulletList { items } | Block::OrderedList { items } => {
+                    if items.is_empty() {
+                        return Err("Lists need at least one item.".into());
+                    }
+                    // Each item is at most one level deeper than the one before.
+                    let mut previous = 0;
+                    for (i, item) in items.iter().enumerate() {
+                        if item.level > MAX_LIST_LEVEL || (i == 0 && item.level > 0) || item.level > previous + 1 {
+                            return Err("List items can only nest one level at a time, up to six levels.".into());
+                        }
+                        previous = item.level;
+                    }
+                }
+                Block::Table { rows, .. } => {
+                    let cols = rows.first().map_or(0, Vec::len);
+                    if rows.is_empty() || rows.len() > MAX_TABLE_ROWS || cols == 0 || cols > MAX_TABLE_COLS {
+                        return Err(format!(
+                            "Tables can have 1 to {MAX_TABLE_ROWS} rows and 1 to {MAX_TABLE_COLS} columns."
+                        ));
+                    }
+                    if rows.iter().any(|row| row.len() != cols) {
+                        return Err("Every row of a table needs the same number of cells.".into());
+                    }
+                }
+                Block::Image { src, alt } => {
+                    check_image_name(src)?;
+                    check_text(alt)?;
+                    if alt.len() > 1000 {
+                        return Err("Image descriptions can be at most 1,000 characters.".into());
+                    }
                 }
                 Block::Code { text } => {
                     check_text(text)?;
@@ -232,6 +321,17 @@ impl Document {
         }
         out
     }
+}
+
+/// Uploaded image names: a random id and a known extension, such as
+/// `0f8c…-4a1b.png`. Images live under the owner's own upload folder.
+pub fn check_image_name(name: &str) -> Result<(), String> {
+    let (id, extension) = name.rsplit_once('.').unwrap_or((name, ""));
+    let id_ok = id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    if !id_ok || !IMAGE_TYPES.iter().any(|(_, ext)| *ext == extension) {
+        return Err("That image is not one of this document's uploads.".into());
+    }
+    Ok(())
 }
 
 fn check_text(text: &str) -> Result<(), String> {
@@ -339,5 +439,32 @@ mod tests {
         assert_eq!(doc.word_count(), 3);
         assert_eq!(doc.excerpt(12), "Hello there,…");
         assert_eq!(sample().word_count(), 9);
+    }
+
+    #[test]
+    fn checks_lists_tables_and_images() {
+        let check = |block: serde_json::Value| -> Result<(), String> {
+            serde_json::from_value::<Document>(serde_json::json!({"blocks": [block]})).unwrap().validate()
+        };
+        // Lists saved before nesting still read.
+        assert!(check(serde_json::json!({"type": "bullet_list", "items": [[{"text": "a"}]]})).is_ok());
+        let nested = |levels: &[u8]| {
+            let items: Vec<_> = levels.iter().map(|l| serde_json::json!({"runs": [{"text": "x"}], "level": l})).collect();
+            check(serde_json::json!({"type": "ordered_list", "items": items}))
+        };
+        assert!(nested(&[0, 1, 2, 1, 0]).is_ok());
+        assert!(nested(&[1]).is_err());
+        assert!(nested(&[0, 2]).is_err());
+        assert!(nested(&[0, 1, 2, 3, 4, 5, 6]).is_err());
+        let row = |n: usize| serde_json::json!((0..n).map(|_| serde_json::json!([{"text": "c"}])).collect::<Vec<_>>());
+        assert!(check(serde_json::json!({"type": "table", "rows": [row(2), row(2)]})).is_ok());
+        assert!(check(serde_json::json!({"type": "table", "rows": [row(2), row(3)]})).is_err());
+        assert!(check(serde_json::json!({"type": "table", "rows": [row(21)]})).is_err());
+        assert!(check(serde_json::json!({"type": "table", "rows": []})).is_err());
+        let image = |src: &str| check(serde_json::json!({"type": "image", "src": src}));
+        assert!(image("0f8c2c4e-1b2a-4c3d-9e8f-001122334455.webp").is_ok());
+        for bad in ["../x.png", "0f8c2c4e-1b2a-4c3d-9e8f-001122334455.svg", "x.png", "https://evil/x.png"] {
+            assert!(image(bad).is_err(), "{bad}");
+        }
     }
 }

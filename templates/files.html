@@ -45,6 +45,7 @@
           </form>
           <hr>
           <a href="{{ row.view }}">Open read-only</a>
+          <a href="/files/{{ row.id }}/versions">Version history</a>
           {% for (label, href) in row.exports %}<a href="{{ href }}">Download as {{ label }}</a>{% endfor %}
           <form method="post" action="/files/{{ row.id }}/duplicate"><input type="hidden" name="csrf_token" value="{{ shell.csrf }}"><button>Make a copy</button></form>
           <hr>

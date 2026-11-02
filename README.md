@@ -6,18 +6,25 @@ and one look; each tool lives under its own path.
 
 | Tool | Path | What it does |
 | --- | --- | --- |
-| Docs | `/docs` | Rich-text documents with Markdown/HTML export |
-| Sheets | `/sheets` | Spreadsheets with formulas, number formats and CSV import/export |
+| Docs | `/docs` | Rich-text documents with tables, images and Markdown/HTML export |
+| Sheets | `/sheets` | Spreadsheets with tabs, formulas, sorting, filters and CSV import/export |
 
 The home page (`/`) has a **New** button per tool, your recent files, and search
 across every tool. Files are private to the person who makes them, save as you
 work, and go to a shared trash (`/trash`) that keeps them for 30 days.
 
+**Version history** (`/files/{id}/versions`, also in each file's menu): while
+you work, the content being replaced is kept at most every ten minutes, and
+always before a restore. Each file keeps its latest 30 versions, dropping the
+oldest once they pass 4 MB together. You can open any version read-only and
+restore it; restoring keeps the current content as a version too.
+
 ## Layout
 
 ```
 src/lib.rs        router, health check, home page, static files
-src/files.rs      the shared files table: lists, search, trash, rename, copy, versioned saves
+src/files.rs      the shared files table: lists, search, trash, rename, copy,
+                  versioned saves and version history
 src/schema.rs     tables, created by the health check
 src/ui/           page chrome (Shell, Tool), security headers, helpers
 src/docs/         Docs: model, renderer, pages
@@ -27,8 +34,8 @@ static/           office.css, autosave.js (shared); docs.css, editor.js; sheets.
 tests/            formula engine tests (Node)
 ```
 
-`loki-sdk` comes from a sibling checkout at `../LOKI/crates/loki-sdk` (see
-`Cargo.toml`). Drop the `path` to build against crates.io instead.
+`loki-sdk` 0.3 comes from crates.io, so the app runs on LOKI 0.3 and later. It
+uses LOKI's `database`, `forms` and `uploads` (Docs images) capabilities.
 
 ## Building
 
@@ -52,24 +59,41 @@ Import the package in LOKI's **Applications** page, grant access and enable it.
 ## Docs
 
 The editor posts a validated block model (paragraphs, headings, quotes, code,
-lists, dividers; bold, italic, underline, strikethrough, inline code, links,
-alignment), never HTML, so stored documents cannot carry scripts. Links must be
-`http`, `https` or `mailto`. Paste from web pages, Word or Google Docs is
-converted to the same model.
+nested lists, tables, images, dividers; bold, italic, underline, strikethrough,
+inline code, links, alignment), never HTML, so stored documents cannot carry
+scripts. Links must be `http`, `https` or `mailto`. Paste from web pages, Word
+or Google Docs is converted to the same model, tables and nested lists included.
 
-Shortcuts: Ctrl+B/I/U, Ctrl+E inline code, Ctrl+K link, Ctrl+\ clear
-formatting, Ctrl+Alt+0–3 normal/headings, Ctrl+Shift+7/8 lists,
+- **Lists** nest up to six levels: Tab and Shift+Tab in a list item.
+- **Tables:** insert from the toolbar; a **Table** menu appears inside one for
+  rows, columns, the heading row and deleting. Tab moves between cells and adds
+  a row at the end. Up to 500 rows and 20 columns.
+- **Images:** the toolbar button, or paste or drop PNG, JPEG, GIF or WebP files
+  (5 MB each). They upload to the owner's own folder and only they can load
+  them. Click an image to select it (Delete removes it); double-click to describe
+  it. Exports link to images on the server, so opening them needs a sign-in.
+- **Find and replace:** Ctrl+F (or Ctrl+H), with match case and replace all.
+- **Links:** Ctrl+K opens a small editor beside the text, to add, change, open
+  or remove a link.
+
+Shortcuts: Ctrl+B/I/U, Ctrl+E inline code, Ctrl+K link, Ctrl+F find, Ctrl+\
+clear formatting, Ctrl+Alt+0–3 normal/headings, Ctrl+Shift+7/8 lists,
 Ctrl+Shift+L/E/R/J alignment, Ctrl+Z/Ctrl+Y undo/redo.
 
 ## Sheets
 
-Up to 2,000 rows × 52 columns (A–AZ) and 50,000 filled cells. Formulas are
-evaluated in the browser as you work (`static/formula.js`); each save sends
-every cell's input with its calculated value, which the server validates and
-uses for the read-only view and CSV export.
+Up to 20 tabs, each up to 2,000 rows × 52 columns (A–AZ), and 50,000 filled
+cells in all. Formulas are evaluated in the browser as you work
+(`static/formula.js`); each save sends every cell's input with its calculated
+value, which the server validates and uses for the read-only view, CSV export
+and search. Spreadsheets saved by 0.2 open as a single tab.
 
-- **Formulas:** `+ - * / ^ & %`, comparisons, references (`A1`, `$A$1`) and
-  ranges (`B2:B9`). Functions: `SUM`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`,
+- **Tabs** along the bottom: add, rename (double-click), duplicate, reorder,
+  delete; Ctrl+Page Up/Down switches. Renaming a tab updates formulas that use
+  it; deleting one turns them into `#REF!`.
+- **Formulas:** `+ - * / ^ & %`, comparisons, references (`A1`, `$A$1`,
+  `Sheet2!A1`, `'Q1 data'!B2:B9`) and ranges (`B2:B9`). While typing a formula,
+  click or drag over cells to insert their references. Functions: `SUM`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`,
   `COUNT`, `COUNTA`, `PRODUCT`, `ROUND`, `ABS`, `INT`, `SQRT`, `POWER`, `MOD`,
   `IF`, `IFERROR`, `AND`, `OR`, `NOT`, `CONCAT`/`CONCATENATE`, `LEN`, `UPPER`,
   `LOWER`, `TRIM`, `LEFT`, `RIGHT`. Errors: `#DIV/0!`, `#VALUE!`, `#REF!`,
@@ -77,17 +101,24 @@ uses for the read-only view and CSV export.
 - **Editing:** type to replace a cell, Enter or F2 to edit it, Alt+Enter for a
   line break, Tab/Enter to move on, Delete to clear. Start text with `'` to keep
   it from being read as a number or formula.
-- **Rows and columns:** insert and delete; formulas follow, and references to
-  deleted cells become `#REF!`.
+- **Rows and columns:** insert and delete; formulas on every tab follow, and
+  references to deleted cells become `#REF!`.
+- **Data menu:** sort A→Z or Z→A by the active column (the selected rows, or
+  every row below the frozen ones); filter rows by text in a column (the header
+  row always shows; the filter is saved); freeze rows and columns up to the
+  active cell (up to 10 rows and 5 columns).
+- **Fill:** drag the square at the selection's corner down or right. Evenly
+  stepping numbers continue their series; anything else repeats, with formulas
+  following. Ctrl+D and Ctrl+R fill down and right.
 - **Formatting:** bold, italic, alignment, number formats (number, whole,
   percent, currency), column widths (drag a header edge).
 - **Clipboard:** copy and paste within a spreadsheet moves relative references;
   tab-separated text from Excel or Google Sheets pastes as cells; one copied
   cell fills a whole selection.
-- **CSV:** import replaces the contents; export writes calculated values, with
-  formula-like text escaped so it can't run elsewhere.
-- Shortcuts: Ctrl+B/I, Ctrl+Z/Ctrl+Y, Ctrl+A, Ctrl+arrows to the edges,
-  Home/End, Page Up/Down.
+- **CSV:** import replaces the current tab; export writes the current tab's
+  calculated values, with formula-like text escaped so it can't run elsewhere.
+- Shortcuts: Ctrl+B/I, Ctrl+D/R, Ctrl+Z/Ctrl+Y, Ctrl+A, Ctrl+arrows to the
+  edges, Home/End, Page Up/Down, Ctrl+Page Up/Down for tabs.
 
 ## Adding a tool
 
@@ -97,7 +128,9 @@ uses for the read-only view and CSV export.
 2. Add a `Kind` for it in `src/files.rs`, mount its routes in `router()` and list
    it in `TOOLS` in `src/lib.rs`.
 3. Store files through `files::create`, `Stored::load` and `files::save`, which
-   take care of ownership, versions, trash and search.
+   take care of ownership, conflict versions, history, trash and search. Add the
+   tool's `content` (validate and summarize a body) and `show` (read-only page,
+   also used for earlier versions) to `Kind` in `src/files.rs`.
 4. Put templates under `templates/NAME/` extending `base.html`, wrap pages in
    `ui::page`, reuse `static/autosave.js` for saving, and add new static files
    to `ASSETS` in `src/lib.rs`.

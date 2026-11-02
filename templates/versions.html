@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Version history · {{ title }}{% endblock %}
+{% block head %}<script src="/static/app.js" defer></script>{% endblock %}
+{% block main %}
+<main class="page">
+  <div class="page-head">
+    <h1>Version history</h1>
+    {% if !trashed %}<a class="btn" href="{{ href }}">Back to “{{ title }}”</a>{% endif %}
+  </div>
+  <p class="muted">While you work, the version being replaced is kept at most every ten minutes, and before any restore. The latest 30 are kept.{% if trashed %} This file is in the trash; restore it before restoring a version.{% endif %}</p>
+  <ul class="items">
+    <li class="item current">
+      <a class="item-main" href="{{ href }}{% if trashed %}/view{% endif %}">
+        <span class="item-text">
+          <span class="item-title">Current version</span>
+          <span class="item-detail">{{ title }}{% if !info.is_empty() %} · {{ info }}{% endif %}</span>
+        </span>
+      </a>
+      <span class="item-meta"><time data-ms="{{ updated_at }}">{{ updated }}</time></span>
+    </li>
+    {% for version in versions %}
+    <li class="item">
+      <a class="item-main" href="/files/{{ id }}/versions/{{ version.id }}">
+        <span class="item-text">
+          <span class="item-title"><time data-ms="{{ version.saved_at }}">{{ version.when }}</time></span>
+          <span class="item-detail">{{ version.title }}{% if !version.info.is_empty() %} · {{ version.info }}{% endif %}</span>
+        </span>
+      </a>
+      <span class="item-actions">
+        <a class="btn subtle" href="/files/{{ id }}/versions/{{ version.id }}">View</a>
+        {% if !trashed %}
+        <form method="post" action="/files/{{ id }}/versions/{{ version.id }}/restore" data-confirm="Restore this version? The current one is kept in the history.">
+          <input type="hidden" name="csrf_token" value="{{ shell.csrf }}">
+          <button>Restore</button>
+        </form>
+        {% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% if versions.is_empty() %}<p class="muted">No earlier versions yet. They appear once you've edited for a while.</p>{% endif %}
+</main>
+{% endblock %}

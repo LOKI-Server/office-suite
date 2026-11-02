@@ -10,6 +10,7 @@
   const editor = document.getElementById("editor");
   const wordsEl = document.getElementById("word-count");
   const styleSelect = document.getElementById("block-style");
+  const noticeEl = document.getElementById("notice");
 
   const BLOCK_TAGS = new Set([
     "P", "DIV", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE", "PRE", "UL", "OL", "LI", "HR",
@@ -21,7 +22,15 @@
     "AUDIO", "HEAD", "TITLE", "META", "LINK", "BUTTON", "INPUT", "SELECT", "TEXTAREA", "IMG",
   ]);
   // Elements that start a line; each counts as one position when saving the selection.
-  const UNIT_TAGS = new Set(["P", "DIV", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE", "PRE", "LI"]);
+  const UNIT_TAGS = new Set(["P", "DIV", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE", "PRE", "LI", "TD", "TH"]);
+  // Blocks that can't become paragraphs, headings or list items.
+  const SOLID_TAGS = ["TABLE", "FIGURE", "HR"];
+  const IMAGE_PATH = "/docs/images/";
+  const IMAGE_NAME = /^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/;
+  const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  const MAX_LEVEL = 5;
+  const MAX_TABLE_ROWS = 500;
+  const MAX_TABLE_COLS = 20;
   const ALIGNS = ["center", "right", "justify"];
   const MARK_TAGS = [["code", "code"], ["strike", "s"], ["underline", "u"], ["italic", "em"], ["bold", "strong"]];
 
@@ -80,15 +89,56 @@
       }
       case "bullet_list":
       case "ordered_list": {
+        // The editor keeps lists flat; a class marks each item's depth.
         const list = el(block.type === "bullet_list" ? "ul" : "ol");
-        for (const item of block.items) list.appendChild(finishLine(renderRuns(item, el("li"))));
+        for (const item of block.items) {
+          const li = finishLine(renderRuns(Array.isArray(item) ? item : item.runs, el("li")));
+          setLevel(li, item.level || 0);
+          list.appendChild(li);
+        }
         return list;
       }
       case "divider":
         return el("hr");
+      case "table": {
+        const table = el("table");
+        const body = el("tbody");
+        table.appendChild(body);
+        block.rows.forEach((row, r) => {
+          const tr = el("tr");
+          for (const cell of row) tr.appendChild(finishLine(renderRuns(cell, el(block.header && r === 0 ? "th" : "td"))));
+          body.appendChild(tr);
+        });
+        return table;
+      }
+      case "image":
+        return imageFigure(block.src, block.alt);
       default:
         return aligned(finishLine(renderRuns(block.runs, el("p"))), block.align);
     }
+  }
+
+  // Images are atomic blocks the cursor moves around, not into.
+  function imageFigure(src, alt) {
+    const figure = el("figure");
+    figure.className = "image";
+    figure.contentEditable = "false";
+    figure.dataset.src = src;
+    const img = el("img");
+    img.src = IMAGE_PATH + encodeURIComponent(src);
+    img.alt = alt || "";
+    figure.appendChild(img);
+    return figure;
+  }
+
+  const levelOf = (li) => {
+    const m = /\blevel-(\d)\b/.exec(li.className || "");
+    return m ? Number(m[1]) : 0;
+  };
+  function setLevel(li, level) {
+    for (let l = 1; l <= MAX_LEVEL; l++) li.classList.remove("level-" + l);
+    if (level > 0) li.classList.add("level-" + level);
+    if (!li.classList.length) li.removeAttribute("class");
   }
 
   function renderBlocks(blocks) {
@@ -233,23 +283,69 @@
       if (align) block.align = align;
       return block;
     };
-    const listItems = (list, items) => {
+    // List items with their depth: from nested lists in pasted HTML, or from
+    // the editor's level classes.
+    const listItems = (list, items, level) => {
       for (const child of list.childNodes) {
         if (child.nodeName === "LI") {
-          // Nested lists become following items of this one.
           const nested = Array.from(child.children).filter((c) => c.nodeName === "UL" || c.nodeName === "OL");
           nested.forEach((n) => n.remove());
-          items.push(inlineRuns(child, pasted));
-          nested.forEach((n) => listItems(n, items));
+          const own = Math.min(level + levelOf(child), MAX_LEVEL);
+          items.push({ runs: inlineRuns(child, pasted), level: own });
+          nested.forEach((n) => listItems(n, items, Math.min(own + 1, MAX_LEVEL)));
         } else if (child.nodeName === "UL" || child.nodeName === "OL") {
-          listItems(child, items);
+          listItems(child, items, Math.min(level + 1, MAX_LEVEL));
         } else if (child.textContent.trim()) {
           const runs = [];
           collectInline(child, runs, {}, pasted);
-          items.push(finishRuns(runs, pasted));
+          items.push({ runs: finishRuns(runs, pasted), level });
         }
       }
       return items;
+    };
+    // Each item may be at most one level deeper than the one before.
+    const fixLevels = (items) => {
+      let previous = -1;
+      for (const item of items) {
+        item.level = Math.max(0, Math.min(item.level, previous + 1));
+        if (!item.level) delete item.level;
+        previous = item.level || 0;
+      }
+      return items;
+    };
+    const tableBlock = (table) => {
+      const rows = Array.from(table.rows).slice(0, MAX_TABLE_ROWS);
+      if (!rows.length) return null;
+      const cols = Math.min(MAX_TABLE_COLS, Math.max(...rows.map((row) => row.cells.length)));
+      if (!cols) return null;
+      const header = Array.from(rows[0].cells).every((cell) => cell.nodeName === "TH") ||
+        rows[0].parentNode.nodeName === "THEAD";
+      return {
+        type: "table",
+        header,
+        rows: rows.map((row) =>
+          Array.from({ length: cols }, (_, c) => (row.cells[c] ? inlineRuns(row.cells[c], pasted) : []))),
+      };
+    };
+    // Images uploaded to this app, from the editor or pasted from another document.
+    const imageBlock = (node) => {
+      let src = node.dataset && node.dataset.src;
+      const img = node.nodeName === "IMG" ? node : node.querySelector && node.querySelector("img");
+      if (!src && img) {
+        try {
+          const url = new URL(img.getAttribute("src") || "", window.location.href);
+          if (url.origin === window.location.origin && url.pathname.startsWith(IMAGE_PATH)) {
+            src = decodeURIComponent(url.pathname.slice(IMAGE_PATH.length));
+          }
+        } catch (_) {
+          src = null;
+        }
+      }
+      if (!src || !IMAGE_NAME.test(src)) return null;
+      const block = { type: "image", src };
+      const alt = img ? (img.getAttribute("alt") || "").trim().slice(0, 1000) : "";
+      if (alt) block.alt = alt;
+      return block;
     };
     const visit = (node) => {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -258,8 +354,17 @@
         collectInline(node, loose, {}, pasted);
         return;
       }
-      if (node.nodeType !== Node.ELEMENT_NODE || SKIP_TAGS.has(node.nodeName)) return;
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
       const tag = node.nodeName;
+      if (tag === "IMG" || tag === "FIGURE") {
+        const image = imageBlock(node);
+        if (image) {
+          flush();
+          blocks.push(image);
+          return;
+        }
+      }
+      if (SKIP_TAGS.has(tag)) return;
       if (!BLOCK_TAGS.has(tag) && hasBlockDescendant(node)) {
         // Inline wrappers around blocks, like Google Docs' outer <b>, are containers.
         flush();
@@ -284,13 +389,16 @@
       } else if (tag === "PRE") {
         blocks.push({ type: "code", text: preText(node) });
       } else if (tag === "UL" || tag === "OL") {
-        const items = listItems(node.cloneNode(true), []);
+        const items = fixLevels(listItems(node.cloneNode(true), [], 0));
         if (items.length) blocks.push({ type: tag === "UL" ? "bullet_list" : "ordered_list", items });
       } else if (tag === "LI") {
         const last = blocks[blocks.length - 1];
-        const runs = inlineRuns(node, pasted);
-        if (last && last.type === "bullet_list") last.items.push(runs);
-        else blocks.push({ type: "bullet_list", items: [runs] });
+        const item = { runs: inlineRuns(node, pasted) };
+        if (last && last.type === "bullet_list") last.items.push(item);
+        else blocks.push({ type: "bullet_list", items: [item] });
+      } else if (tag === "TABLE") {
+        const table = tableBlock(node);
+        if (table) blocks.push(table);
       } else if (tag === "HR") {
         blocks.push({ type: "divider" });
       } else if (tag === "P" || !hasBlockChild(node)) {
@@ -437,9 +545,10 @@
     changed();
   }
 
-  // Runs a DOM change as one undoable step.
-  function mutate(change) {
-    focusEditor();
+  // Runs a DOM change as one undoable step. `quiet` leaves the focus where it
+  // is, for changes made from the find bar.
+  function mutate(change, quiet) {
+    if (!quiet) focusEditor();
     if (history.timer) record();
     change();
     ensureStructure();
@@ -472,7 +581,7 @@
     const units = [];
     for (let block = start; block; block = block.nextSibling) {
       if (block.nodeName === "UL" || block.nodeName === "OL") {
-        for (const li of block.children) if (li.nodeName === "LI" && range.intersectsNode(li)) units.push(li);
+        for (const li of block.querySelectorAll("li")) if (range.intersectsNode(li)) units.push(li);
       } else if (block.nodeType === Node.ELEMENT_NODE) {
         units.push(block);
       }
@@ -575,6 +684,18 @@
       }
       restoreSelection(saved);
     }
+    // The cursor needs a line after a table, image or divider at the end.
+    const last = editor.lastElementChild;
+    if (last && SOLID_TAGS.includes(last.nodeName)) editor.appendChild(finishLine(el("p")));
+    // Keep list depths valid after indenting, outdenting or deleting items.
+    for (const list of editor.querySelectorAll(":scope > ul, :scope > ol")) {
+      let previous = -1;
+      for (const li of list.children) {
+        const level = Math.min(levelOf(li), previous + 1);
+        if (level !== levelOf(li)) setLevel(li, level);
+        previous = level;
+      }
+    }
     editor.classList.toggle(
       "is-empty",
       editor.childNodes.length === 1 && editor.firstChild.nodeName === "P" && !editor.textContent,
@@ -586,7 +707,7 @@
   function setBlockStyle(tag) {
     mutate(() => {
       const saved = saveSelection();
-      replaceUnits(selectedUnits(), (unit) => {
+      replaceUnits(selectedUnits().filter((u) => !SOLID_TAGS.includes(u.nodeName)), (unit) => {
         const node = moveInline(unit, el(tag));
         const align = /^(P|H\d|DIV)$/.test(unit.nodeName) && alignOf(unit);
         if (align && /^(p|h\d)$/.test(tag)) aligned(node, align);
@@ -597,7 +718,7 @@
   }
 
   function toggleList(tag) {
-    const units = selectedUnits();
+    const units = selectedUnits().filter((u) => !SOLID_TAGS.includes(u.nodeName));
     if (!units.length) return;
     if (units.every((u) => u.nodeName === "LI" && u.parentNode.nodeName === tag.toUpperCase())) {
       setBlockStyle("p");
@@ -605,7 +726,7 @@
     }
     mutate(() => {
       const saved = saveSelection();
-      replaceUnits(units.filter((u) => u.nodeName !== "HR"), (unit) => moveInline(unit, el("li")));
+      replaceUnits(units, (unit) => moveInline(unit, el("li")));
       gatherItems(tag);
       restoreSelection(saved);
     });
@@ -682,37 +803,99 @@
     return null;
   }
 
+  // ---------------------------------------------------------------- link popover
+
+  const linkPopover = document.getElementById("link-popover");
+  const linkInput = document.getElementById("link-input");
+  const linkError = document.getElementById("link-error");
+  let linkTarget = null; // {range, anchor}
+
   function editLink() {
     const range = currentRange();
     if (!range) return;
     const anchor = closest(range.commonAncestorContainer, ["A"]);
-    const answer = window.prompt(
-      anchor ? "Edit the link address, or clear it to remove the link:" : "Link to a web or email address:",
-      anchor ? anchor.getAttribute("href") : "https://",
-    );
-    if (answer === null) {
-      focusEditor();
-      return;
-    }
-    focusEditor();
-    if (anchor) {
-      const whole = document.createRange();
-      whole.selectNodeContents(anchor);
+    linkTarget = { range: range.cloneRange(), anchor };
+    linkInput.value = anchor ? anchor.getAttribute("href") : "";
+    linkError.textContent = "";
+    document.getElementById("link-remove").hidden = !anchor;
+    document.getElementById("link-open").hidden = !anchor;
+    linkPopover.hidden = false;
+    // Below the selection, kept on screen.
+    const box = (range.getClientRects()[0] || range.getBoundingClientRect());
+    const width = linkPopover.offsetWidth;
+    linkPopover.style.left = Math.max(8, Math.min(box.left, window.innerWidth - width - 8)) + "px";
+    linkPopover.style.top = Math.min(box.bottom + 8, window.innerHeight - linkPopover.offsetHeight - 8) + "px";
+    linkInput.focus();
+    linkInput.select();
+  }
+
+  function closeLink(refocus) {
+    if (linkPopover.hidden) return;
+    linkPopover.hidden = true;
+    if (refocus && linkTarget) {
+      editor.focus({ preventScroll: true });
       const selection = window.getSelection();
       selection.removeAllRanges();
-      selection.addRange(whole);
-      if (!answer.trim()) {
-        document.execCommand("unlink");
-        return;
-      }
+      selection.addRange(linkTarget.range);
     }
-    const url = normalizeUrl(answer);
+    linkTarget = null;
+  }
+
+  // Puts the selection back on the linked text (or the whole existing link).
+  function selectLinkTarget() {
+    editor.focus({ preventScroll: true });
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    if (linkTarget.anchor && linkTarget.anchor.isConnected) {
+      const whole = document.createRange();
+      whole.selectNodeContents(linkTarget.anchor);
+      selection.addRange(whole);
+    } else {
+      selection.addRange(linkTarget.range);
+    }
+  }
+
+  function applyLink() {
+    if (!linkTarget) return;
+    const text = linkInput.value.trim();
+    if (!text) return removeLink();
+    const url = normalizeUrl(text);
     if (!url) {
-      window.alert("Links must be web addresses (https://…) or email addresses.");
+      linkError.textContent = "Use a web address (https://…) or an email address.";
       return;
     }
+    selectLinkTarget();
     document.execCommand("createLink", false, url);
+    linkPopover.hidden = true;
+    linkTarget = null;
   }
+
+  function removeLink() {
+    if (!linkTarget) return;
+    selectLinkTarget();
+    document.execCommand("unlink");
+    linkPopover.hidden = true;
+    linkTarget = null;
+  }
+
+  document.getElementById("link-apply").addEventListener("click", applyLink);
+  document.getElementById("link-remove").addEventListener("click", removeLink);
+  document.getElementById("link-open").addEventListener("click", () => {
+    const link = cleanLink(linkInput.value);
+    if (link) window.open(link, "_blank", "noopener,noreferrer");
+  });
+  linkInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      applyLink();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeLink(true);
+    }
+  });
+  document.addEventListener("mousedown", (event) => {
+    if (!linkPopover.hidden && !linkPopover.contains(event.target)) closeLink(false);
+  });
 
   function clearFormatting() {
     focusEditor();
@@ -720,10 +903,357 @@
     document.execCommand("unlink");
   }
 
+  // ---------------------------------------------------------------- nested lists
+
+  // Tab and Shift+Tab: each selected item moves one level, never more than one
+  // deeper than the item before it.
+  function indentItems(delta) {
+    const items = selectedUnits().filter((u) => u.nodeName === "LI");
+    if (!items.length) return false;
+    mutate(() => {
+      const saved = saveSelection();
+      for (const li of items) {
+        const before = li.previousElementSibling;
+        const ceiling = before && before.nodeName === "LI" ? levelOf(before) + 1 : 0;
+        setLevel(li, Math.max(0, Math.min(levelOf(li) + delta, ceiling, MAX_LEVEL)));
+      }
+      restoreSelection(saved);
+    });
+    return true;
+  }
+
+  // ---------------------------------------------------------------- tables
+
+  const tableTools = document.getElementById("table-tools");
+  const cellAtCaret = () => {
+    const range = currentRange();
+    return range && closest(range.startContainer, ["TD", "TH"]);
+  };
+  function caretIn(cell, atEnd) {
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    const last = cell.lastChild;
+    if (atEnd && last && last.nodeName === "BR") range.setEndBefore(last);
+    range.collapse(!atEnd);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+  const newCell = (tag) => finishLine(el(tag));
+
+  function insertTable() {
+    mutate(() => {
+      const range = currentRange();
+      const block = range ? topLevel(range.startContainer, range.startOffset) : editor.lastChild;
+      const table = renderBlock({
+        type: "table",
+        header: true,
+        rows: Array.from({ length: 3 }, () => Array.from({ length: 3 }, () => [])),
+      });
+      if (block && block.nodeName === "P" && !block.textContent) block.replaceWith(table);
+      else if (block) block.after(table);
+      else editor.append(table);
+      if (!table.nextElementSibling) table.after(finishLine(el("p")));
+      caretIn(table.rows[0].cells[0], false);
+    });
+  }
+
+  function tableCommand(name) {
+    const cell = cellAtCaret();
+    if (!cell) return;
+    const table = closest(cell, ["TABLE"]);
+    const row = cell.parentNode;
+    const r = row.rowIndex, c = cell.cellIndex;
+    const header = table.rows[0].cells[0].nodeName === "TH";
+    const cols = table.rows[0].cells.length;
+    mutate(() => {
+      let target = cell;
+      switch (name) {
+        case "rowAbove":
+        case "rowBelow": {
+          if (table.rows.length >= MAX_TABLE_ROWS) return window.alert(`Tables can have up to ${MAX_TABLE_ROWS} rows.`);
+          const tr = el("tr");
+          for (let i = 0; i < cols; i++) tr.appendChild(newCell("td"));
+          // A new row never goes above the heading row.
+          if (name === "rowAbove" && !(header && r === 0)) row.before(tr);
+          else row.after(tr);
+          target = tr.cells[c];
+          break;
+        }
+        case "colLeft":
+        case "colRight": {
+          if (cols >= MAX_TABLE_COLS) return window.alert(`Tables can have up to ${MAX_TABLE_COLS} columns.`);
+          for (const tr of table.rows) {
+            const cellHere = tr.cells[c];
+            const added = newCell(cellHere.nodeName === "TH" ? "th" : "td");
+            if (name === "colLeft") cellHere.before(added);
+            else cellHere.after(added);
+            if (tr === row) target = added;
+          }
+          break;
+        }
+        case "deleteRow": {
+          if (table.rows.length === 1) return deleteTable(table);
+          const next = table.rows[r + 1] || table.rows[r - 1];
+          row.remove();
+          target = next.cells[Math.min(c, next.cells.length - 1)];
+          break;
+        }
+        case "deleteCol": {
+          if (cols === 1) return deleteTable(table);
+          for (const tr of table.rows) tr.cells[c].remove();
+          target = row.cells[Math.min(c, row.cells.length - 1)];
+          break;
+        }
+        case "header": {
+          for (const old of Array.from(table.rows[0].cells)) {
+            const swapped = el(header ? "td" : "th");
+            while (old.firstChild) swapped.appendChild(old.firstChild);
+            old.replaceWith(swapped);
+            if (old === cell) target = swapped;
+          }
+          break;
+        }
+        case "deleteTable":
+          return deleteTable(table);
+      }
+      caretIn(target, true);
+    });
+  }
+
+  function deleteTable(table) {
+    const p = finishLine(el("p"));
+    table.replaceWith(p);
+    caretIn(p, false);
+  }
+
+  // Tab moves through cells; Tab in the last cell adds a row.
+  function tabInTable(cell, back) {
+    const cells = Array.from(closest(cell, ["TABLE"]).querySelectorAll("td, th"));
+    const index = cells.indexOf(cell) + (back ? -1 : 1);
+    if (index < 0) return;
+    if (index >= cells.length) {
+      tableCommand("rowBelow");
+      return;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(cells[index]);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  // ---------------------------------------------------------------- images
+
+  const imageInput = document.getElementById("image-input");
+  let notifyTimer = null;
+  function notify(text, error) {
+    noticeEl.textContent = text;
+    noticeEl.classList.toggle("error", !!error);
+    clearTimeout(notifyTimer);
+    if (text && !error) notifyTimer = setTimeout(() => notify(""), 4000);
+  }
+
+  // Uploads an image file and puts it after the block holding `range`.
+  async function addImage(file, range) {
+    if (!IMAGE_TYPES.includes(file.type)) return notify("Only PNG, JPEG, GIF and WebP images can be added.", true);
+    if (file.size > 5 * 1024 * 1024) return notify("Images can be at most 5 MB.", true);
+    notify("Uploading image…");
+    const form = new FormData();
+    form.append("csrf_token", data.csrf);
+    form.append("file", file, file.name || "image");
+    let src;
+    try {
+      const response = await fetch("/docs/images", { method: "POST", body: form, credentials: "same-origin" });
+      if (!response.ok) {
+        const message = (await response.text()).trim();
+        return notify(message.length < 200 && message ? message : "The image couldn't be uploaded.", true);
+      }
+      src = (await response.json()).src;
+    } catch (_) {
+      return notify("The image couldn't be uploaded. Check your connection.", true);
+    }
+    notify("");
+    if (range && editor.contains(range.startContainer)) lastRange = range;
+    mutate(() => {
+      const r = currentRange();
+      const block = r ? topLevel(r.startContainer, r.startOffset) : editor.lastChild;
+      const alt = (file.name || "").replace(/\.[^.]+$/, "").slice(0, 200);
+      const figure = imageFigure(src, alt);
+      if (block && block.nodeName === "P" && !block.textContent) block.replaceWith(figure);
+      else if (block) block.after(figure);
+      else editor.append(figure);
+      if (!figure.nextElementSibling) figure.after(finishLine(el("p")));
+      caretIn(figure.nextElementSibling, false);
+    });
+  }
+
+  imageInput.addEventListener("change", () => {
+    const file = imageInput.files[0];
+    imageInput.value = "";
+    if (file) addImage(file, lastRange);
+  });
+
+  // Clicking an image selects it; Delete or Backspace then removes it, and
+  // double-clicking edits its description.
+  let selectedFigure = null;
+  function selectFigure(figure) {
+    if (selectedFigure) selectedFigure.classList.remove("selected");
+    selectedFigure = figure;
+    if (figure) figure.classList.add("selected");
+  }
+
+  // ---------------------------------------------------------------- find and replace
+
+  const findBar = document.getElementById("find-bar");
+  const findInput = document.getElementById("find-input");
+  const replaceInput = document.getElementById("replace-input");
+  const findCase = document.getElementById("find-case");
+  const findCount = document.getElementById("find-count");
+  const highlights = typeof CSS !== "undefined" && CSS.highlights && typeof Highlight !== "undefined";
+  let matches = [];
+  let current = -1;
+
+  // Every match, as ranges, within each line of text (matches don't span lines).
+  function findMatches() {
+    const query = findInput.value;
+    const out = [];
+    if (!query) return out;
+    const needle = findCase.checked ? query : query.toLowerCase();
+    const leaves = Array.from(editor.querySelectorAll("p, h1, h2, h3, blockquote, pre, li, td, th"))
+      .filter((unit) => !unit.querySelector("p, h1, h2, h3, blockquote, pre, li, td, th"));
+    for (const unit of leaves) {
+      const nodes = [];
+      let text = "";
+      const walker = document.createTreeWalker(unit, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        nodes.push({ node: walker.currentNode, start: text.length });
+        text += walker.currentNode.data;
+      }
+      const haystack = findCase.checked ? text : text.toLowerCase();
+      const locate = (index) => {
+        let i = nodes.length - 1;
+        while (i > 0 && nodes[i].start > index) i--;
+        return [nodes[i].node, index - nodes[i].start];
+      };
+      for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + needle.length)) {
+        const range = document.createRange();
+        range.setStart(...locate(at));
+        const [endNode, endOffset] = locate(at + needle.length);
+        // An end exactly at a node's end belongs to that node, not the next.
+        if (endOffset === 0 && endNode !== nodes[0].node) {
+          const previous = nodes[nodes.findIndex((n) => n.node === endNode) - 1].node;
+          range.setEnd(previous, previous.length);
+        } else range.setEnd(endNode, endOffset);
+        out.push(range);
+      }
+    }
+    return out;
+  }
+
+  function showMatches(scroll) {
+    matches = findMatches();
+    if (current >= matches.length) current = matches.length - 1;
+    if (current < 0 && matches.length) current = 0;
+    findCount.textContent = findInput.value ? (matches.length ? `${current + 1} of ${matches.length}` : "No matches") : "";
+    if (highlights) {
+      CSS.highlights.set("find", new Highlight(...matches));
+      CSS.highlights.set("find-current", new Highlight(...(matches[current] ? [matches[current]] : [])));
+    }
+    if (scroll && matches[current]) {
+      const box = matches[current].getBoundingClientRect();
+      const canvas = editor.closest(".canvas");
+      const view = canvas.getBoundingClientRect();
+      if (box.top < view.top + 40 || box.bottom > view.bottom - 40) {
+        canvas.scrollTop += box.top - view.top - view.height / 3;
+      }
+    }
+  }
+
+  function openFind(withReplace) {
+    findBar.hidden = false;
+    const range = currentRange();
+    const selected = range && !range.collapsed ? range.toString() : "";
+    if (selected && !selected.includes("\n")) findInput.value = selected;
+    (withReplace ? replaceInput : findInput).focus();
+    findInput.select();
+    current = 0;
+    showMatches(true);
+  }
+  function closeFind() {
+    findBar.hidden = true;
+    matches = [];
+    if (highlights) {
+      CSS.highlights.delete("find");
+      CSS.highlights.delete("find-current");
+    }
+    editor.focus();
+  }
+  function step(direction) {
+    if (!matches.length) return;
+    current = (current + direction + matches.length) % matches.length;
+    showMatches(true);
+  }
+  function replaceOne() {
+    const range = matches[current];
+    if (!range) return;
+    mutate(() => {
+      range.deleteContents();
+      if (replaceInput.value) range.insertNode(document.createTextNode(replaceInput.value));
+    }, true);
+    showMatches(true);
+  }
+  function replaceAll() {
+    if (!matches.length) return;
+    const count = matches.length;
+    mutate(() => {
+      for (const range of matches.slice().reverse()) {
+        range.deleteContents();
+        if (replaceInput.value) range.insertNode(document.createTextNode(replaceInput.value));
+      }
+    }, true);
+    showMatches(false);
+    findCount.textContent = `Replaced ${count}`;
+  }
+
+  findInput.addEventListener("input", () => {
+    current = 0;
+    showMatches(true);
+  });
+  findCase.addEventListener("change", () => showMatches(true));
+  for (const input of [findInput, replaceInput]) {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeFind();
+      } else if (event.key === "Enter" && input === findInput) {
+        event.preventDefault();
+        step(event.shiftKey ? -1 : 1);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        replaceOne();
+      }
+    });
+  }
+  document.getElementById("find-next").addEventListener("click", () => step(1));
+  document.getElementById("find-prev").addEventListener("click", () => step(-1));
+  document.getElementById("replace-one").addEventListener("click", replaceOne);
+  document.getElementById("replace-all").addEventListener("click", replaceAll);
+  document.getElementById("find-close").addEventListener("click", closeFind);
+  let findTimer = null;
+  editor.addEventListener("input", () => {
+    if (findBar.hidden) return;
+    clearTimeout(findTimer);
+    findTimer = setTimeout(() => showMatches(false), 200);
+  });
+
   function command(name) {
     switch (name) {
       case "undo": return travel(-1);
       case "redo": return travel(1);
+      case "table": return insertTable();
+      case "image": return imageInput.click();
+      case "find": return openFind(false);
       case "code": return toggleCode();
       case "link": return editLink();
       case "clear": return clearFormatting();
@@ -799,6 +1329,12 @@
     styleSelect.value = ["h1", "h2", "h3", "blockquote", "pre"].includes(tag) ? tag : "p";
     const align = (block && block.nodeType === Node.ELEMENT_NODE && alignOf(block)) || "left";
     for (const button of alignButtons) button.setAttribute("aria-pressed", String(button.dataset.align === align));
+    const cell = closest(node, ["TD", "TH"]);
+    tableTools.hidden = !cell;
+    if (cell) {
+      const header = closest(cell, ["TABLE"]).rows[0].cells[0].nodeName === "TH";
+      tableTools.querySelector("[data-table=header]").setAttribute("aria-pressed", String(header));
+    }
   }
 
   // ---------------------------------------------------------------- saving
@@ -854,8 +1390,8 @@
     if (!range) return;
     const unit = closest(range.startContainer, Array.from(UNIT_TAGS));
     const inlineOnly = blocks.length === 1 && blocks[0].type === "paragraph";
-    if (!inlineOnly && unit && unit.nodeName === "LI") {
-      // Lists hold lines, not blocks: paste each block as a new item.
+    if (!inlineOnly && unit && ["LI", "TD", "TH"].includes(unit.nodeName)) {
+      // List items and table cells hold lines, not blocks: paste the text.
       document.execCommand("insertText", false, blocks.map((b) => blockText(b)).join("\n"));
       return;
     }
@@ -890,9 +1426,16 @@
 
   function blockText(block) {
     if (block.type === "code") return block.text;
-    const runs = block.runs || (block.items || []).flatMap((item, i) => (i ? [{ text: "\n" }] : []).concat(item));
-    return runs.map((r) => r.text).join("");
+    if (block.type === "image") return block.alt || "";
+    if (block.type === "table") {
+      return block.rows.map((row) => row.map((cell) => cell.map((r) => r.text).join("")).join("\t")).join("\n");
+    }
+    const lines = block.runs ? [block.runs] : (block.items || []).map((item) => item.runs || item);
+    return lines.map((runs) => runs.map((r) => r.text).join("")).join("\n");
   }
+
+  const imageFiles = (transfer) =>
+    Array.from(transfer.files || []).filter((file) => IMAGE_TYPES.includes(file.type));
 
   function insertTransfer(transfer) {
     const html = transfer.getData("text/html");
@@ -910,19 +1453,27 @@
   editor.addEventListener("paste", (event) => {
     if (!event.clipboardData) return;
     event.preventDefault();
+    const images = imageFiles(event.clipboardData);
+    // A copied picture (a screenshot, say) arrives as a file.
+    if (images.length && !event.clipboardData.getData("text/html")) {
+      for (const file of images) addImage(file, currentRange());
+      return;
+    }
     insertTransfer(event.clipboardData);
   });
 
   editor.addEventListener("drop", (event) => {
     const transfer = event.dataTransfer;
-    if (!transfer || transfer.files.length || !(transfer.types.includes("text/html") || transfer.types.includes("text/plain"))) {
-      if (transfer && transfer.files.length) event.preventDefault();
-      return;
-    }
-    event.preventDefault();
     const point = document.caretRangeFromPoint
       ? document.caretRangeFromPoint(event.clientX, event.clientY)
       : null;
+    if (transfer && transfer.files.length) {
+      event.preventDefault();
+      for (const file of imageFiles(transfer)) addImage(file, point);
+      return;
+    }
+    if (!transfer || !(transfer.types.includes("text/html") || transfer.types.includes("text/plain"))) return;
+    event.preventDefault();
     if (point) {
       const selection = window.getSelection();
       selection.removeAllRanges();
@@ -953,7 +1504,20 @@
       event.preventDefault();
       fn();
     };
+    if (selectedFigure && (event.key === "Delete" || event.key === "Backspace")) {
+      const figure = selectedFigure;
+      selectFigure(null);
+      return run(() => mutate(() => {
+        const next = figure.nextElementSibling || finishLine(el("p"));
+        if (!next.isConnected) figure.after(next);
+        figure.remove();
+        caretIn(next, false);
+      }));
+    }
+    if (selectedFigure && !["Shift", "Control", "Meta", "Alt"].includes(event.key)) selectFigure(null);
     if (mod && !event.altKey) {
+      if (key === "f") return run(() => openFind(false));
+      if (key === "h") return run(() => openFind(true));
       if (key === "z" && !event.shiftKey) return run(() => travel(-1));
       if ((key === "z" && event.shiftKey) || key === "y") return run(() => travel(1));
       if (key === "k") return run(editLink);
@@ -973,9 +1537,23 @@
     const pre = range && closest(range.startContainer, ["PRE"]);
     if (pre && event.key === "Enter" && !mod) return run(() => handleCodeEnter(pre, event.shiftKey));
     if (pre && event.key === "Tab" && !mod) return run(() => document.execCommand("insertText", false, "\t"));
+    const cell = range && closest(range.startContainer, ["TD", "TH"]);
+    if (cell && event.key === "Tab" && !mod) return run(() => tabInTable(cell, event.shiftKey));
+    const item = range && closest(range.startContainer, ["LI"]);
+    if (item && event.key === "Tab" && !mod) return run(() => indentItems(event.shiftKey ? -1 : 1));
   });
 
   editor.addEventListener("click", (event) => {
+    const figure = event.target.closest && event.target.closest("figure.image");
+    selectFigure(figure || null);
+    if (figure) {
+      const range = document.createRange();
+      range.selectNode(figure);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return;
+    }
     const anchor = event.target.closest && event.target.closest("a");
     if (anchor && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
@@ -1001,6 +1579,20 @@
     });
   }
   styleSelect.addEventListener("change", () => setBlockStyle(styleSelect.value));
+  for (const button of tableTools.querySelectorAll("[data-table]")) {
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => tableCommand(button.dataset.table));
+  }
+  editor.addEventListener("dblclick", (event) => {
+    const figure = event.target.closest && event.target.closest("figure.image");
+    if (!figure) return;
+    const img = figure.querySelector("img");
+    const alt = window.prompt("Describe this image for people who can't see it:", img.alt);
+    if (alt === null) return;
+    mutate(() => {
+      img.alt = alt.trim().slice(0, 1000);
+    });
+  });
 
   // ---------------------------------------------------------------- start
 

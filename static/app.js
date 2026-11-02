@@ -21,3 +21,12 @@ document.addEventListener("click", (event) => closeMenus(event.target.closest("d
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeMenus(null);
 });
+
+// Show exact times in the reader's own time zone; the relative text stays as a tooltip.
+for (const time of document.querySelectorAll("time[data-ms]")) {
+  const date = new Date(Number(time.dataset.ms));
+  if (Number.isNaN(date.getTime())) continue;
+  time.title = time.textContent;
+  time.dateTime = date.toISOString();
+  time.textContent = date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}

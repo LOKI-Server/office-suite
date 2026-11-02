@@ -1,8 +1,10 @@
-// Sheets formula engine: reads cell inputs, evaluates formulas, formats
-// values, and rewrites references when rows or columns move. It has no DOM
-// dependencies, so tests/formula.test.js runs it under Node.
+// Sheets formula engine: reads cell inputs, evaluates formulas across a
+// workbook's tabs, formats values, and rewrites references when rows,
+// columns or tabs change. It has no DOM dependencies, so
+// tests/formula.test.js runs it under Node.
 //
 // Values are null (empty), numbers, strings, booleans or {error: "#CODE"}.
+// References may name a tab: Sheet2!A1, 'Q1 budget'!B2:B9.
 "use strict";
 (function (root) {
   const ERRORS = ["#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#ERROR!", "#CYCLE!"];
@@ -29,13 +31,23 @@
     const m = /^([A-Z]{1,2})([1-9]\d{0,5})$/.exec(key);
     return m ? { col: colIndex(m[1]), row: Number(m[2]) - 1 } : null;
   }
-  function parseRef(text) {
+  function parseRef(text, sheet) {
     const m = /^(\$?)([A-Za-z]{1,2})(\$?)([1-9]\d{0,5})$/.exec(text);
     if (!m) return null;
-    return { col: colIndex(m[2]), row: Number(m[4]) - 1, colAbs: !!m[1], rowAbs: !!m[3] };
+    return { col: colIndex(m[2]), row: Number(m[4]) - 1, colAbs: !!m[1], rowAbs: !!m[3], sheet: sheet || null };
   }
-  const refText = (ref) =>
+  // Tab names never contain quotes, so quoting needs no escapes.
+  function quoteSheet(name) {
+    return /^[A-Za-z_][A-Za-z0-9_.]*$/.test(name) && !/^[A-Za-z]{1,2}\d+$/.test(name) ? name : "'" + name + "'";
+  }
+  const sameSheet = (a, b) => a.toLowerCase() === b.toLowerCase();
+  const cellText = (ref) =>
     (ref.colAbs ? "$" : "") + colName(ref.col) + (ref.rowAbs ? "$" : "") + (ref.row + 1);
+  const refText = (ref) => (ref.sheet ? quoteSheet(ref.sheet) + "!" : "") + cellText(ref);
+  // A reference to `name`'s cell, as typed in a formula on `home`.
+  function pointText(name, home, col, row) {
+    return (name && !sameSheet(name, home) ? quoteSheet(name) + "!" : "") + keyOf(col, row);
+  }
 
   // ------------------------------------------------------------------ inputs
 
@@ -67,9 +79,9 @@
       /((?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)/.source, // 2 number
       /("(?:[^"]|"")*")/.source, // 3 string
       /(#(?:DIV\/0!|VALUE!|REF!|NAME\?|NUM!|N\/A|ERROR!|CYCLE!))/.source, // 4 error
-      /(\$?[A-Za-z]{1,2}\$?[1-9]\d{0,5})(?![A-Za-z0-9_.(])/.source, // 5 reference
-      /([A-Za-z_][A-Za-z0-9_.]*)/.source, // 6 name
-      /(<=|>=|<>|[-+*/^&=<>%:(),])/.source, // 7 operator
+      /((?:'[^']+'|[A-Za-z_][A-Za-z0-9_.]*)!)?(\$?[A-Za-z]{1,2}\$?[1-9]\d{0,5})(?![A-Za-z0-9_.(!])/.source, // 5 tab, 6 reference
+      /([A-Za-z_][A-Za-z0-9_.]*)/.source, // 7 name
+      /(<=|>=|<>|[-+*/^&=<>%:(),])/.source, // 8 operator
     ].join("|"),
     "y",
   );
@@ -86,9 +98,11 @@
       if (m[2]) tokens.push({ type: "num", value: Number(m[2]), start, end });
       else if (m[3]) tokens.push({ type: "str", value: m[3].slice(1, -1).replace(/""/g, '"'), start, end });
       else if (m[4]) tokens.push({ type: "err", value: m[4], start, end });
-      else if (m[5]) tokens.push({ type: "ref", value: parseRef(m[5]), start, end });
-      else if (m[6]) tokens.push({ type: "name", value: m[6].toUpperCase(), start, end });
-      else tokens.push({ type: "op", value: m[7], start, end });
+      else if (m[6]) {
+        const sheet = m[5] ? m[5].slice(0, -1).replace(/^'(.*)'$/, "$1") : null;
+        tokens.push({ type: "ref", value: parseRef(m[6], sheet), start, end });
+      } else if (m[7]) tokens.push({ type: "name", value: m[7].toUpperCase(), start, end });
+      else tokens.push({ type: "op", value: m[8], start, end });
     }
     return tokens;
   }
@@ -148,7 +162,12 @@
         case "ref":
           if (isOp(":") && tokens[i + 1] && tokens[i + 1].type === "ref") {
             i++;
-            return { t: "range", a: token.value, b: tokens[i++].value };
+            const b = tokens[i++].value;
+            // A range lies on one tab: Sheet2!A1:B3, or Sheet2!A1:Sheet2!B3.
+            if (b.sheet && !(token.value.sheet && sameSheet(b.sheet, token.value.sheet))) {
+              return { t: "val", v: err("#REF!") };
+            }
+            return { t: "range", a: token.value, b };
           }
           return { t: "ref", ref: token.value };
         case "name": {
@@ -238,13 +257,19 @@
   function evaluate(node, ctx) {
     switch (node.t) {
       case "val": return node.v;
-      case "ref": return ctx.get(node.ref.col, node.ref.row);
+      case "ref": {
+        const t = ctx.tab(node.ref);
+        return t < 0 ? err("#REF!") : ctx.get(t, node.ref.col, node.ref.row);
+      }
       case "range": {
+        const t = ctx.tab(node.a);
+        if (t < 0) return err("#REF!");
         const c1 = Math.min(node.a.col, node.b.col), c2 = Math.max(node.a.col, node.b.col);
         const r1 = Math.min(node.a.row, node.b.row), r2 = Math.max(node.a.row, node.b.row);
-        if (c2 >= ctx.cols || r2 >= ctx.rows) return err("#REF!");
+        const size = ctx.size(t);
+        if (c2 >= size.cols || r2 >= size.rows) return err("#REF!");
         const values = [];
-        for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) values.push(ctx.get(c, r));
+        for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) values.push(ctx.get(t, c, r));
         return { values };
       }
       case "pct": {
@@ -488,36 +513,52 @@
 
   // ------------------------------------------------------------------ sheets
 
-  // Every filled cell's value. `cells` maps names such as "B7" to {input}.
-  function compute(cells, size) {
-    const results = new Map();
+  // Every filled cell's value in every tab. `tabs` is [{name, rows, cols,
+  // cells}], with cells mapping names such as "B7" to {input}; the result has
+  // one Map of values per tab.
+  function computeBook(tabs) {
+    const results = tabs.map(() => new Map());
     const pending = new Set();
-    const ctx = { rows: size.rows, cols: size.cols, get };
-    function get(col, row) {
-      if (col >= size.cols || row >= size.rows) return err("#REF!");
+    const tabIndex = (name) => tabs.findIndex((tab) => sameSheet(tab.name, name));
+    const contexts = tabs.map((_, home) => ({
+      tab: (ref) => (ref.sheet ? tabIndex(ref.sheet) : home),
+      size: (t) => tabs[t],
+      get,
+    }));
+    function get(t, col, row) {
+      const tab = tabs[t];
+      if (col >= tab.cols || row >= tab.rows) return err("#REF!");
       const key = keyOf(col, row);
-      if (results.has(key)) return results.get(key);
-      const cell = cells.get(key);
+      if (results[t].has(key)) return results[t].get(key);
+      const cell = tab.cells.get(key);
       if (!cell || !cell.input) return null;
-      if (pending.has(key)) return err("#CYCLE!");
-      pending.add(key);
+      const id = t + ":" + key;
+      if (pending.has(id)) return err("#CYCLE!");
+      pending.add(id);
       let value;
       if (isFormula(cell.input)) {
-        value = scalar(evaluate(compile(cell.input), ctx));
+        value = scalar(evaluate(compile(cell.input), contexts[t]));
         if (value === null) value = 0;
         value = finite(value);
       } else {
         value = literal(cell.input);
       }
-      pending.delete(key);
-      results.set(key, value);
+      pending.delete(id);
+      results[t].set(key, value);
       return value;
     }
-    for (const key of cells.keys()) {
-      const p = parseKey(key);
-      if (p) get(p.col, p.row);
-    }
+    tabs.forEach((tab, t) => {
+      for (const key of tab.cells.keys()) {
+        const p = parseKey(key);
+        if (p) get(t, p.col, p.row);
+      }
+    });
     return results;
+  }
+
+  // One tab on its own.
+  function compute(cells, size) {
+    return computeBook([{ name: "Sheet1", rows: size.rows, cols: size.cols, cells }])[0];
   }
 
   // ------------------------------------------------------------------ moving references
@@ -532,6 +573,7 @@
     } catch (_) {
       return input;
     }
+    const source = input.slice(1);
     let out = "";
     let last = 0;
     for (let i = 0; i < tokens.length; i++) {
@@ -539,40 +581,55 @@
       if (token.type !== "ref") continue;
       const next = tokens[i + 1], end = tokens[i + 2];
       let text, stop;
+      // Unchanged references keep the text as typed.
       if (next && next.type === "op" && next.value === ":" && end && end.type === "ref") {
         const range = mapRange(token.value, end.value);
-        text = range ? refText(range[0]) + ":" + refText(range[1]) : "#REF!";
+        if (range && range[0] === token.value && range[1] === end.value) text = source.slice(token.start, end.end);
+        else text = range ? refText(range[0]) + ":" + refText(range[1]) : "#REF!";
         stop = end.end;
         i += 2;
       } else {
         const ref = map(token.value);
-        text = ref ? refText(ref) : "#REF!";
+        if (ref === token.value) text = source.slice(token.start, token.end);
+        else text = ref ? refText(ref) : "#REF!";
         stop = token.end;
       }
-      out += input.slice(1).slice(last, token.start) + text;
+      out += source.slice(last, token.start) + text;
       last = stop;
     }
-    return "=" + out + input.slice(1).slice(last);
+    return "=" + out + source.slice(last);
   }
 
   const field = (axis) => (axis === "row" ? "row" : "col");
 
+  // Whether a row or column change on tab `target.name` touches a reference in
+  // a formula on tab `target.home`. Without a target, references naming no tab do.
+  const touches = (target) => (ref) =>
+    target ? (ref.sheet ? sameSheet(ref.sheet, target.name) : sameSheet(target.home, target.name)) : !ref.sheet;
+
   // References at or after `at` move by `count` when rows or columns are inserted.
-  function insertShift(input, axis, at, count) {
+  function insertShift(input, axis, at, count, target) {
     const f = field(axis);
-    const move = (ref) => (ref[f] >= at ? Object.assign({}, ref, { [f]: ref[f] + count }) : ref);
-    return rewrite(input, move, (a, b) => [move(a), move(b)]);
+    const applies = touches(target);
+    const shift = (ref) => (ref[f] >= at ? Object.assign({}, ref, { [f]: ref[f] + count }) : ref);
+    return rewrite(
+      input,
+      (ref) => (applies(ref) ? shift(ref) : ref),
+      (a, b) => (applies(a) ? [shift(a), shift(b)] : [a, b]),
+    );
   }
 
   // References into deleted rows or columns become #REF!; ranges shrink.
-  function deleteShift(input, axis, at, count) {
+  function deleteShift(input, axis, at, count, target) {
     const f = field(axis);
+    const applies = touches(target);
     const map = (ref) => {
-      if (ref[f] < at) return ref;
+      if (!applies(ref) || ref[f] < at) return ref;
       if (ref[f] < at + count) return null;
       return Object.assign({}, ref, { [f]: ref[f] - count });
     };
     const mapRange = (a, b) => {
+      if (!applies(a)) return [a, b];
       const lo = Math.min(a[f], b[f]), hi = Math.max(a[f], b[f]);
       const newLo = lo < at ? lo : lo >= at + count ? lo - count : at;
       const newHi = hi < at ? hi : hi >= at + count ? hi - count : at - 1;
@@ -595,6 +652,33 @@
       const x = move(a), y = move(b);
       return x && y ? [x, y] : null;
     });
+  }
+
+  // References to tab `from` follow it when it is renamed `to`.
+  function renameSheet(input, from, to) {
+    const map = (ref) => (ref.sheet && sameSheet(ref.sheet, from) ? Object.assign({}, ref, { sheet: to }) : ref);
+    return rewrite(input, map, (a, b) => [map(a), map(b)]);
+  }
+
+  // References to a deleted tab become #REF!.
+  function dropSheet(input, name) {
+    const gone = (ref) => !!ref.sheet && sameSheet(ref.sheet, name);
+    return rewrite(input, (ref) => (gone(ref) ? null : ref), (a, b) => (gone(a) ? null : [a, b]));
+  }
+
+  // Sort order for values: numbers, text (ignoring case, numbers in text by
+  // value), booleans, errors. Empty cells always come last, also when descending.
+  function sortCompare(a, b, descending) {
+    const empty = (v) => v === null || v === undefined || v === "";
+    if (empty(a) || empty(b)) return empty(a) === empty(b) ? 0 : empty(a) ? 1 : -1;
+    const rank = (v) => (typeof v === "number" ? 0 : typeof v === "string" ? 1 : typeof v === "boolean" ? 2 : 3);
+    let order = rank(a) - rank(b);
+    if (!order) {
+      if (typeof a === "string") order = a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+      else if (isErr(a)) order = a.error < b.error ? -1 : a.error > b.error ? 1 : 0;
+      else order = a < b ? -1 : a > b ? 1 : 0;
+    }
+    return descending ? -order : order;
   }
 
   // ------------------------------------------------------------------ display
@@ -684,8 +768,9 @@
   }
 
   const api = {
-    ERRORS, colName, colIndex, keyOf, parseKey, literal, isFormula, compute,
-    insertShift, deleteShift, moveFormula, display, general, isErr,
+    ERRORS, colName, colIndex, keyOf, parseKey, literal, isFormula, compute, computeBook,
+    insertShift, deleteShift, moveFormula, renameSheet, dropSheet, sortCompare,
+    quoteSheet, pointText, display, general, isErr,
     parseDelimited, toDelimited,
   };
   if (typeof module === "object" && module.exports) module.exports = api;

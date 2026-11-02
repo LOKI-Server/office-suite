@@ -39,6 +39,9 @@ pub fn router() -> Router {
         .post("/files/{id}/trash", files::move_to_trash)
         .post("/files/{id}/restore", files::restore)
         .post("/files/{id}/purge", files::purge)
+        .get("/files/{id}/versions", files::versions)
+        .get("/files/{id}/versions/{version}", files::show_version)
+        .post("/files/{id}/versions/{version}/restore", files::restore_version)
         .get("/static/{file}", asset);
     sheets::routes(docs::routes(router))
 }

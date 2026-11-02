@@ -4,20 +4,31 @@
 {% block head %}<link rel="stylesheet" href="/static/sheets.css"><script src="/static/app.js" defer></script>{% endblock %}
 {% block appbar %}<span class="view-title">{{ title }}</span><span class="muted view-detail">{{ detail }}</span>{% endblock %}
 {% block main %}
+{% include "version-banner.html" %}
 <div class="view-actions">
+  {% if version.is_none() %}
   <a class="btn primary" href="/sheets/{{ id }}">Edit</a>
+  {% endif %}
   <button type="button" data-print>Print</button>
-  <a class="btn" href="/sheets/{{ id }}/export.csv">CSV</a>
+  {% if version.is_none() %}
+  <a class="btn" href="/sheets/{{ id }}/export.csv?tab={{ tab }}">CSV</a>
+  <a class="btn subtle" href="/files/{{ id }}/versions">Version history</a>
+  {% endif %}
 </div>
 <div class="grid-wrap">
   <table class="grid view" style="width: {{ width }}px">
     <colgroup><col class="row-head-col">{% for (_, width) in columns %}<col style="width: {{ width }}px">{% endfor %}</colgroup>
     <thead><tr><th class="corner"></th>{% for (name, _) in columns %}<th scope="col">{{ name }}</th>{% endfor %}</tr></thead>
     <tbody>
-      {% for row in rows %}
-      <tr><th scope="row">{{ loop.index }}</th>{% for cell in row %}<td{% if !cell.class.is_empty() %} class="{{ cell.class }}"{% endif %}>{{ cell.text }}</td>{% endfor %}</tr>
+      {% for (number, row) in rows %}
+      <tr><th scope="row">{{ number }}</th>{% for cell in row %}<td{% if !cell.class.is_empty() %} class="{{ cell.class }}"{% endif %}>{{ cell.text }}</td>{% endfor %}</tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+{% if tabs.len() > 1 %}
+<nav class="tab-bar" aria-label="Tabs">
+  {% for name in tabs %}<a class="tab{% if loop.index0 == tab %} active{% endif %}" href="?tab={{ loop.index0 }}"{% if loop.index0 == tab %} aria-current="page"{% endif %}>{{ name }}</a>{% endfor %}
+</nav>
+{% endif %}
 {% endblock %}
