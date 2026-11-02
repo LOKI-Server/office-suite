@@ -51,7 +51,7 @@ cargo install cargo-loki --locked
 cargo test                                    # Rust unit tests
 node --test tests/formula.test.js             # formula engine tests
 cargo loki dev --server PATH_TO_LOKI_SERVER   # local LOKI with live rebuilds
-cargo loki package                            # writes target/loki/office-0.2.0.loki-app
+cargo loki package                            # writes target/loki/office-0.3.0.loki-app
 ```
 
 Import the package in LOKI's **Applications** page, grant access and enable it.
