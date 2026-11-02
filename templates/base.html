@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}Home{% endblock %} · LOKI Office</title>
+<link rel="stylesheet" href="/static/office.css">
+{% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+<header class="appbar">
+  <a class="brand" href="/" title="LOKI Office home">
+    <span class="brand-mark" aria-hidden="true">LO</span>
+    <span class="brand-name">LOKI Office</span>
+  </a>
+  {% if let Some(tool) = shell.tool %}<a class="crumb" href="{{ tool.href }}">{{ tool.name }}</a>{% endif %}
+  <div class="appbar-slot">{% block appbar %}{% endblock %}</div>
+  <div class="account">
+    {% if !shell.dashboard.is_empty() %}<a class="btn subtle" href="{{ shell.dashboard }}">LOKI</a>{% endif %}
+    <span class="who">{{ shell.user }}</span>
+    <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ shell.csrf }}"><button class="btn subtle">Sign out</button></form>
+  </div>
+</header>
+{% block main %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block body_class %}view-page{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/docs.css"><script src="/static/app.js" defer></script>{% endblock %}
+{% block appbar %}<span class="view-title">{{ title }}</span><span class="muted view-detail">{{ detail }}</span>{% endblock %}
+{% block main %}
+<div class="view-actions">
+  <a class="btn primary" href="/docs/{{ id }}">Edit</a>
+  <button type="button" data-print>Print</button>
+  <a class="btn" href="/docs/{{ id }}/export.md">Markdown</a>
+  <a class="btn" href="/docs/{{ id }}/export.html">HTML</a>
+</div>
+<div class="canvas">
+  <article class="paper doc">
+    <h1 class="doc-title">{{ title }}</h1>
+    {{ body|safe }}
+  </article>
+</div>
+{% endblock %}

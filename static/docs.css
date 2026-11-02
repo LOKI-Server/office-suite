@@ -1,0 +1,104 @@
+/* Docs: the editor surface, the printable page and document typography. */
+body { --accent: #2f6fde; --accent-soft: #e6eefc; }
+@media (prefers-color-scheme: dark) {
+  body { --accent: #6a9cf5; --accent-soft: #233353; }
+}
+.icon { flex: none; }
+.foot a { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); text-decoration: none; }
+.foot a:hover { color: var(--text); }
+
+/* Editor page layout: app bar, toolbar, scrolling canvas, status bar. */
+.editor-page, .view-page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.editor-page .appbar, .view-page .appbar { position: static; }
+.title-input {
+  flex: 1; min-width: 0; max-width: 520px;
+  font-size: 17px !important; font-weight: 600;
+  border-color: transparent !important; background: transparent !important;
+}
+.title-input:hover { border-color: var(--border) !important; }
+.title-input:focus { border-color: var(--accent) !important; background: var(--surface) !important; }
+.save-status { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.save-status.error { color: var(--danger); }
+
+.toolbar {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 6px 12px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.tool-group { display: flex; align-items: center; gap: 2px; padding-right: 6px; margin-right: 2px; border-right: 1px solid var(--border); }
+.tool-group:last-child { border-right: 0; }
+.tool-spacer { flex: 1; }
+.tool {
+  min-width: 32px; width: 32px; height: 32px; min-height: 32px; padding: 0;
+  border-color: transparent; background: transparent; font-size: 15px;
+}
+.tool .icon, .menu .icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tool[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); }
+.tool-select { min-width: 140px; }
+.serif { font-family: Georgia, serif; }
+
+.canvas { flex: 1; overflow: auto; padding: 32px 16px 96px; }
+.paper {
+  position: relative;
+  max-width: 816px; min-height: 1056px; margin: 0 auto;
+  padding: 72px 88px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 2px;
+  box-shadow: var(--shadow);
+}
+.statusbar {
+  display: flex; justify-content: space-between; gap: 16px;
+  padding: 4px 16px; font-size: 12px; color: var(--muted);
+  background: var(--surface); border-top: 1px solid var(--border);
+}
+.view-title { font-weight: 600; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.view-detail { font-size: 13px; white-space: nowrap; }
+.view-actions { display: flex; gap: 8px; padding: 8px 16px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+
+/* Document typography, shared by the editor and the read-only view. */
+.doc {
+  font: 16px/1.65 Georgia, "Iowan Old Style", "Times New Roman", serif;
+  color: var(--text); overflow-wrap: break-word;
+}
+.doc:focus { outline: none; }
+.doc > :first-child { margin-top: 0; }
+.doc p { margin: 0 0 .75em; }
+/* Keep runs of spaces the writer typed, on lines only: whitespace between
+   blocks in rendered HTML must still collapse. */
+.doc p, .doc h1, .doc h2, .doc h3, .doc li, .doc blockquote { white-space: pre-wrap; }
+.doc h1, .doc h2, .doc h3, .doc .doc-title { font-family: var(--font); font-weight: 650; margin: 1.2em 0 .4em; }
+.doc .doc-title { font-size: 2.1em; margin-top: 0; }
+.doc h1 { font-size: 1.75em; }
+.doc h2 { font-size: 1.4em; }
+.doc h3 { font-size: 1.15em; }
+.doc ul, .doc ol { margin: 0 0 .75em; padding-left: 1.6em; }
+.doc li { margin: .15em 0; }
+.doc blockquote { margin: 0 0 .75em; padding: .1em 0 .1em 1em; border-left: 3px solid var(--border-strong); color: var(--muted); }
+.doc pre {
+  margin: 0 0 .75em; padding: .75em 1em; border-radius: 6px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font: 14px/1.5 var(--mono); white-space: pre-wrap;
+}
+.doc code { font-family: var(--mono); font-size: .88em; padding: .1em .3em; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); }
+.doc pre code { padding: 0; border: 0; background: none; font-size: inherit; }
+.doc hr { border: 0; border-top: 1px solid var(--border-strong); margin: 1.5em 0; }
+.doc a { color: var(--accent); }
+.doc .align-center { text-align: center; }
+.doc .align-right { text-align: right; }
+.doc .align-justify { text-align: justify; }
+.doc[contenteditable] a { cursor: text; }
+.doc.is-empty::before {
+  content: "Start writing…"; position: absolute; color: var(--muted); pointer-events: none;
+}
+
+@media (max-width: 760px) {
+  .canvas { padding: 0; }
+  .paper { padding: 32px 20px; min-height: 100%; border: 0; box-shadow: none; }
+  .tool-select { min-width: 0; }
+}
+@media print {
+  .editor-page, .view-page { display: block; height: auto; overflow: visible; }
+  .toolbar, .statusbar, .view-actions, .banner { display: none !important; }
+  .canvas { padding: 0; overflow: visible; }
+  .paper { max-width: none; min-height: 0; padding: 0; border: 0; box-shadow: none; background: #fff; }
+  .doc { color: #000; }
+}

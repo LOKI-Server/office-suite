@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block body_class %}editor-page{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/docs.css"><script src="/static/editor.js" defer></script>{% endblock %}
+{% block appbar %}
+<input id="doc-title" class="title-input" value="{{ title }}" maxlength="200" aria-label="Document title" autocomplete="off" spellcheck="false">
+<span id="save-status" class="save-status" role="status" aria-live="polite">Saved</span>
+{% endblock %}
+{% block main %}
+<div class="toolbar" role="toolbar" aria-label="Formatting">
+  <div class="tool-group">
+    <button type="button" class="tool" data-cmd="undo" title="Undo (Ctrl+Z)" aria-label="Undo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+    <button type="button" class="tool" data-cmd="redo" title="Redo (Ctrl+Y)" aria-label="Redo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+  </div>
+  <div class="tool-group">
+    <select id="block-style" class="tool-select" aria-label="Text style" title="Text style">
+      <option value="p">Normal text</option>
+      <option value="h1">Heading 1</option>
+      <option value="h2">Heading 2</option>
+      <option value="h3">Heading 3</option>
+      <option value="blockquote">Quote</option>
+      <option value="pre">Code block</option>
+    </select>
+  </div>
+  <div class="tool-group">
+    <button type="button" class="tool" data-cmd="bold" title="Bold (Ctrl+B)" aria-label="Bold" aria-pressed="false"><b>B</b></button>
+    <button type="button" class="tool" data-cmd="italic" title="Italic (Ctrl+I)" aria-label="Italic" aria-pressed="false"><i class="serif">I</i></button>
+    <button type="button" class="tool" data-cmd="underline" title="Underline (Ctrl+U)" aria-label="Underline" aria-pressed="false"><u>U</u></button>
+    <button type="button" class="tool" data-cmd="strikeThrough" title="Strikethrough (Alt+Shift+5)" aria-label="Strikethrough" aria-pressed="false"><s>S</s></button>
+    <button type="button" class="tool" data-cmd="code" title="Inline code (Ctrl+E)" aria-label="Inline code" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></svg></button>
+    <button type="button" class="tool" data-cmd="link" title="Link (Ctrl+K)" aria-label="Link" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg></button>
+    <button type="button" class="tool" data-cmd="clear" title="Clear formatting (Ctrl+\)" aria-label="Clear formatting"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7V4h16v3M9 20h6M12 4l-3 16M4 20 20 4"/></svg></button>
+  </div>
+  <div class="tool-group">
+    <button type="button" class="tool" data-cmd="insertUnorderedList" title="Bulleted list (Ctrl+Shift+8)" aria-label="Bulleted list" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r=".8"/><circle cx="4" cy="12" r=".8"/><circle cx="4" cy="18" r=".8"/></svg></button>
+    <button type="button" class="tool" data-cmd="insertOrderedList" title="Numbered list (Ctrl+Shift+7)" aria-label="Numbered list" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h10M10 12h10M10 18h10M4 4h1v4M4 8h2M4 14.5a1 1 0 0 1 2 .5l-2 3h2"/></svg></button>
+    <button type="button" class="tool" data-cmd="divider" title="Horizontal line" aria-label="Horizontal line"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18"/></svg></button>
+  </div>
+  <div class="tool-group">
+    <button type="button" class="tool" data-align="left" title="Align left (Ctrl+Shift+L)" aria-label="Align left" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 10h10M4 14h16M4 18h10"/></svg></button>
+    <button type="button" class="tool" data-align="center" title="Center (Ctrl+Shift+E)" aria-label="Center" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 10h10M4 14h16M7 18h10"/></svg></button>
+    <button type="button" class="tool" data-align="right" title="Align right (Ctrl+Shift+R)" aria-label="Align right" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M10 10h10M4 14h16M10 18h10"/></svg></button>
+    <button type="button" class="tool" data-align="justify" title="Justify (Ctrl+Shift+J)" aria-label="Justify" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg></button>
+  </div>
+  <div class="tool-spacer"></div>
+  <div class="tool-group">
+    <a class="btn subtle" href="/docs/{{ id }}/view" title="Read-only view for printing">Print view</a>
+    <details class="menu">
+      <summary aria-label="Download">{% include "icons/more.svg" %}</summary>
+      <div class="menu-panel">
+        <a href="/docs/{{ id }}/export.md">Download as Markdown</a>
+        <a href="/docs/{{ id }}/export.html">Download as HTML</a>
+      </div>
+    </details>
+  </div>
+</div>
+<div id="conflict" class="banner" role="alert" hidden>
+  <span class="grow" id="conflict-text">This document was changed somewhere else.</span>
+  <button type="button" id="conflict-reload">Load the latest version</button>
+  <button type="button" id="conflict-overwrite" class="primary">Keep my version</button>
+</div>
+<div class="canvas">
+  <article id="editor" class="paper doc" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true" aria-label="Document body"></article>
+</div>
+<footer class="statusbar"><span id="word-count">0 words</span><span class="muted">Saved automatically · Ctrl+S saves now</span></footer>
+<script id="doc-data" type="application/json">{{ data|safe }}</script>
+{% endblock %}
