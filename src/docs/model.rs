@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_BLOCKS: usize = 5_000;
 pub const MAX_TEXT_BYTES: usize = 512 * 1024;
-pub const MAX_TITLE_CHARS: usize = 200;
 pub const MAX_LINK_BYTES: usize = 2_048;
-pub const UNTITLED: &str = "Untitled document";
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Document {
@@ -236,18 +234,6 @@ impl Document {
     }
 }
 
-/// Trims a title and falls back to "Untitled document" when it is blank.
-pub fn clean_title(title: &str) -> Result<String, String> {
-    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
-    if title.chars().count() > MAX_TITLE_CHARS {
-        return Err(format!("Titles can be at most {MAX_TITLE_CHARS} characters."));
-    }
-    if title.chars().any(char::is_control) {
-        return Err("Titles cannot contain control characters.".into());
-    }
-    Ok(if title.is_empty() { UNTITLED.into() } else { title })
-}
-
 fn check_text(text: &str) -> Result<(), String> {
     if text.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
         return Err("Text cannot contain control characters.".into());
@@ -353,12 +339,5 @@ mod tests {
         assert_eq!(doc.word_count(), 3);
         assert_eq!(doc.excerpt(12), "Hello there,…");
         assert_eq!(sample().word_count(), 9);
-    }
-
-    #[test]
-    fn cleans_titles() {
-        assert_eq!(clean_title("  Quarterly \n report ").unwrap(), "Quarterly report");
-        assert_eq!(clean_title("   ").unwrap(), UNTITLED);
-        assert!(clean_title(&"x".repeat(201)).is_err());
     }
 }

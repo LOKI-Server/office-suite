@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block body_class %}view-page{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/sheets.css"><script src="/static/app.js" defer></script>{% endblock %}
+{% block appbar %}<span class="view-title">{{ title }}</span><span class="muted view-detail">{{ detail }}</span>{% endblock %}
+{% block main %}
+<div class="view-actions">
+  <a class="btn primary" href="/sheets/{{ id }}">Edit</a>
+  <button type="button" data-print>Print</button>
+  <a class="btn" href="/sheets/{{ id }}/export.csv">CSV</a>
+</div>
+<div class="grid-wrap">
+  <table class="grid view" style="width: {{ width }}px">
+    <colgroup><col class="row-head-col">{% for (_, width) in columns %}<col style="width: {{ width }}px">{% endfor %}</colgroup>
+    <thead><tr><th class="corner"></th>{% for (name, _) in columns %}<th scope="col">{{ name }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr><th scope="row">{{ loop.index }}</th>{% for cell in row %}<td{% if !cell.class.is_empty() %} class="{{ cell.class }}"{% endif %}>{{ cell.text }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

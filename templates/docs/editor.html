@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ title }}{% endblock %}
 {% block body_class %}editor-page{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/docs.css"><script src="/static/editor.js" defer></script>{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/docs.css"><script src="/static/autosave.js" defer></script><script src="/static/editor.js" defer></script>{% endblock %}
 {% block appbar %}
 <input id="doc-title" class="title-input" value="{{ title }}" maxlength="200" aria-label="Document title" autocomplete="off" spellcheck="false">
 <span id="save-status" class="save-status" role="status" aria-live="polite">Saved</span>

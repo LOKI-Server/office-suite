@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}{{ tool.name }}{% endblock %}
+{% block head %}<script src="/static/app.js" defer></script>{% endblock %}
+{% block main %}
+<main class="page">
+  <div class="page-head">
+    <h1>{{ tool.name }}</h1>
+    <form class="search" method="get" action="{{ tool.href }}" role="search">
+      <input type="search" name="q" value="{{ query }}" placeholder="Search {{ tool.name|lower }}" aria-label="Search {{ tool.name|lower }}">
+    </form>
+    <form method="post" action="{{ tool.href }}/new">
+      <input type="hidden" name="csrf_token" value="{{ shell.csrf }}">
+      <button class="primary">{% include "icons/plus.svg" %}New {{ tool.noun }}</button>
+    </form>
+  </div>
+  {% if rows.is_empty() %}
+    {% if query.is_empty() %}
+    <div class="empty">
+      <h2>No {{ tool.noun }}s yet</h2>
+      <p>Your files are private to you and saved as you work.</p>
+      <form method="post" action="{{ tool.href }}/new"><input type="hidden" name="csrf_token" value="{{ shell.csrf }}"><button class="primary">Make your first {{ tool.noun }}</button></form>
+    </div>
+    {% else %}
+    <div class="empty"><h2>Nothing matches “{{ query }}”</h2><p><a href="{{ tool.href }}">Show all {{ tool.noun }}s</a></p></div>
+    {% endif %}
+  {% else %}
+  <ul class="items">
+    {% for row in rows %}
+    <li class="item">
+      <a class="item-main" href="{{ row.href }}">
+        <span class="item-icon">{% if row.icon == "sheet" %}{% include "icons/sheet.svg" %}{% else %}{% include "icons/doc.svg" %}{% endif %}</span>
+        <span class="item-text">
+          <span class="item-title">{{ row.title }}</span>
+          <span class="item-detail">{% if row.excerpt.is_empty() %}{{ row.empty }}{% else %}{{ row.excerpt }}{% endif %}</span>
+        </span>
+      </a>
+      <span class="item-meta">{{ row.detail }}</span>
+      <details class="menu">
+        <summary aria-label="Actions for {{ row.title }}">{% include "icons/more.svg" %}</summary>
+        <div class="menu-panel">
+          <form class="rename" method="post" action="/files/{{ row.id }}/rename">
+            <input type="hidden" name="csrf_token" value="{{ shell.csrf }}">
+            <input name="title" value="{{ row.title }}" maxlength="200" aria-label="New title" required>
+            <button>Rename</button>
+          </form>
+          <hr>
+          <a href="{{ row.view }}">Open read-only</a>
+          {% for (label, href) in row.exports %}<a href="{{ href }}">Download as {{ label }}</a>{% endfor %}
+          <form method="post" action="/files/{{ row.id }}/duplicate"><input type="hidden" name="csrf_token" value="{{ shell.csrf }}"><button>Make a copy</button></form>
+          <hr>
+          <form method="post" action="/files/{{ row.id }}/trash"><input type="hidden" name="csrf_token" value="{{ shell.csrf }}"><button class="danger">Move to trash</button></form>
+        </div>
+      </details>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <p class="foot"><a href="/trash">{% include "icons/trash.svg" %} Trash</a></p>
+</main>
+{% endblock %}

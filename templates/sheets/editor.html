@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block body_class %}editor-page sheet-page{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/sheets.css"><script src="/static/autosave.js" defer></script><script src="/static/formula.js" defer></script><script src="/static/sheet.js" defer></script>{% endblock %}
+{% block appbar %}
+<input id="doc-title" class="title-input" value="{{ title }}" maxlength="200" aria-label="Spreadsheet title" autocomplete="off" spellcheck="false">
+<span id="save-status" class="save-status" role="status" aria-live="polite">Saved</span>
+{% endblock %}
+{% block main %}
+<div class="toolbar" role="toolbar" aria-label="Formatting">
+  <div class="tool-group">
+    <button type="button" class="tool" data-cmd="undo" title="Undo (Ctrl+Z)" aria-label="Undo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+    <button type="button" class="tool" data-cmd="redo" title="Redo (Ctrl+Y)" aria-label="Redo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+  </div>
+  <div class="tool-group">
+    <select id="number-format" class="tool-select" aria-label="Number format" title="Number format">
+      <option value="">General</option>
+      <option value="number">Number 1,234.50</option>
+      <option value="integer">Whole 1,235</option>
+      <option value="percent">Percent 12.5%</option>
+      <option value="currency">Currency $1,234.50</option>
+    </select>
+  </div>
+  <div class="tool-group">
+    <button type="button" class="tool" data-cmd="bold" title="Bold (Ctrl+B)" aria-label="Bold" aria-pressed="false"><b>B</b></button>
+    <button type="button" class="tool" data-cmd="italic" title="Italic (Ctrl+I)" aria-label="Italic" aria-pressed="false"><i class="serif">I</i></button>
+  </div>
+  <div class="tool-group">
+    <button type="button" class="tool" data-align="left" title="Align left" aria-label="Align left" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 10h10M4 14h16M4 18h10"/></svg></button>
+    <button type="button" class="tool" data-align="center" title="Center" aria-label="Center" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 10h10M4 14h16M7 18h10"/></svg></button>
+    <button type="button" class="tool" data-align="right" title="Align right" aria-label="Align right" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M10 10h10M4 14h16M10 18h10"/></svg></button>
+  </div>
+  <div class="tool-group">
+    <details class="menu">
+      <summary class="menu-label">Rows &amp; columns</summary>
+      <div class="menu-panel menu-left">
+        <button type="button" data-cmd="insertRowAbove">Insert row above</button>
+        <button type="button" data-cmd="insertRowBelow">Insert row below</button>
+        <button type="button" data-cmd="deleteRows" class="danger">Delete rows</button>
+        <hr>
+        <button type="button" data-cmd="insertColLeft">Insert column left</button>
+        <button type="button" data-cmd="insertColRight">Insert column right</button>
+        <button type="button" data-cmd="deleteCols" class="danger">Delete columns</button>
+        <hr>
+        <button type="button" data-cmd="addRows">Add 100 rows at the bottom</button>
+      </div>
+    </details>
+  </div>
+  <div class="tool-spacer"></div>
+  <div class="tool-group">
+    <label class="btn subtle file-button" title="Load a CSV file into this spreadsheet">Import CSV<input type="file" id="import-csv" accept=".csv,text/csv,.tsv,text/tab-separated-values" hidden></label>
+    <a class="btn subtle" href="/sheets/{{ id }}/view" title="Read-only view for printing">Print view</a>
+    <a class="btn subtle" href="/sheets/{{ id }}/export.csv">Download CSV</a>
+  </div>
+</div>
+<div class="formula-bar">
+  <span id="cell-name" class="cell-name" aria-live="polite">A1</span>
+  <span class="fx" aria-hidden="true">fx</span>
+  <input id="formula" class="formula-input" aria-label="Cell contents" autocomplete="off" spellcheck="false">
+</div>
+<div id="conflict" class="banner" role="alert" hidden>
+  <span class="grow" id="conflict-text">This spreadsheet was changed somewhere else.</span>
+  <button type="button" id="conflict-reload">Load the latest version</button>
+  <button type="button" id="conflict-overwrite" class="primary">Keep my version</button>
+</div>
+<div id="grid-wrap" class="grid-wrap" tabindex="-1">
+  <table id="grid" class="grid" role="grid" aria-label="Spreadsheet"></table>
+  <textarea id="cell-editor" class="cell-editor" aria-label="Edit cell" spellcheck="false" hidden></textarea>
+</div>
+<footer class="statusbar"><span id="selection-stats"></span><span class="muted">Saved automatically · Ctrl+S saves now</span></footer>
+<script id="doc-data" type="application/json">{{ data|safe }}</script>
+{% endblock %}

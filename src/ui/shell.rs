@@ -3,8 +3,18 @@ use loki_sdk::{Request, Response, Result, User};
 /// One tool in the suite, such as Docs.
 pub struct Tool {
     pub name: &'static str,
-    /// Where the tool's own home page lives, such as `/docs`.
+    /// Where the tool's own home page lives, such as `/docs`. Its files open at
+    /// `{href}/{id}`, read-only at `{href}/{id}/view`, and new ones are made by
+    /// posting to `{href}/new`.
     pub href: &'static str,
+    /// What one file is called, such as "document".
+    pub noun: &'static str,
+    /// The icon template under `templates/icons/`, without `.svg`.
+    pub icon: &'static str,
+    /// Shown in lists in place of an empty excerpt.
+    pub empty: &'static str,
+    /// Download formats: a label and the file name under `{href}/{id}/`.
+    pub exports: &'static [(&'static str, &'static str)],
 }
 
 /// Page chrome for templates extending `base.html`, which need a `shell` field.

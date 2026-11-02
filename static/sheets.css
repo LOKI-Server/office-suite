@@ -1,0 +1,85 @@
+/* Sheets: the grid, formula bar and cell editor, and the read-only table. */
+body { --accent: #1f8a57; --accent-soft: #e2f3ea; --grid: #e3e6ea; --head: #f3f4f6; }
+@media (prefers-color-scheme: dark) {
+  body { --accent: #4cc38a; --accent-soft: #1d3a2c; --grid: #2f343b; --head: #22262c; }
+}
+
+.menu-label {
+  width: auto !important; padding: 0 10px; color: var(--text) !important; white-space: nowrap;
+}
+.menu-left { right: auto; left: 0; }
+.file-button { cursor: pointer; }
+
+.formula-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 12px; background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.cell-name {
+  min-width: 72px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px;
+  font: 13px var(--mono); color: var(--muted); text-align: center;
+}
+.fx { font: italic 600 13px Georgia, serif; color: var(--muted); }
+.formula-input {
+  flex: 1; min-width: 0; font: 13px/1.4 var(--mono) !important;
+  border-color: transparent !important; min-height: 28px !important;
+}
+.formula-input:focus { border-color: var(--accent) !important; }
+
+/* The grid scrolls in both directions; headers stay put. */
+.grid-wrap {
+  position: relative; flex: 1; overflow: auto; outline: none;
+  background: var(--surface);
+}
+.grid {
+  table-layout: fixed; border-collapse: separate; border-spacing: 0;
+  font: 13px/1 var(--font); color: var(--text);
+  user-select: none;
+}
+.grid th, .grid td {
+  height: 25px; padding: 0 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  border-right: 1px solid var(--grid); border-bottom: 1px solid var(--grid);
+  box-sizing: border-box;
+}
+.grid thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--head); color: var(--muted); font-weight: 500; text-align: center;
+}
+.grid tbody th {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--head); color: var(--muted); font-weight: 500; text-align: center;
+  font-size: 12px;
+}
+.grid thead th.corner { left: 0; z-index: 3; cursor: cell; }
+.grid th.head-selected { background: var(--accent-soft); color: var(--accent); }
+.grid td { background: var(--surface); cursor: cell; }
+.grid td.selected { background: var(--accent-soft); }
+.grid td.active { box-shadow: inset 0 0 0 2px var(--accent); }
+.grid tr.spacer td { padding: 0; border: 0; background: transparent; }
+.grid .align-center { text-align: center; }
+.grid .align-right { text-align: right; }
+.grid .bold { font-weight: 700; }
+.grid .italic { font-style: italic; }
+.grid .error { color: var(--danger); }
+.resize {
+  position: absolute; top: 0; right: -3px; width: 7px; height: 100%;
+  cursor: col-resize; z-index: 4;
+}
+.grid thead th { overflow: visible; }
+
+.cell-editor {
+  position: absolute; z-index: 5; box-sizing: border-box; resize: none;
+  padding: 4px 6px; margin: 0; overflow: hidden;
+  font: 13px/1.3 var(--font); color: var(--text);
+  background: var(--surface); border: 2px solid var(--accent); outline: none;
+  box-shadow: var(--shadow-pop);
+}
+
+/* Read-only view */
+.grid.view { user-select: text; }
+.grid.view td { cursor: default; }
+.grid.view .row-head-col { width: 48px; }
+
+@media print {
+  .grid-wrap { overflow: visible; }
+  .grid thead th, .grid tbody th { position: static; }
+}

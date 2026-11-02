@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Trash{% endblock %}
+{% block head %}<script src="/static/app.js" defer></script>{% endblock %}
+{% block main %}
+<main class="page">
+  <div class="page-head">
+    <h1>Trash</h1>
+    <a class="btn" href="/">Back home</a>
+    {% if !rows.is_empty() %}
+    <form method="post" action="/trash/empty" data-confirm="Delete every file in the trash forever?">
+      <input type="hidden" name="csrf_token" value="{{ shell.csrf }}">
+      <button class="danger">Empty trash</button>
+    </form>
+    {% endif %}
+  </div>
+  <p class="muted">Files in the trash are deleted for good after {{ days }} days.</p>
+  {% if rows.is_empty() %}
+  <div class="empty"><h2>The trash is empty</h2></div>
+  {% else %}
+  <ul class="items">
+    {% for row in rows %}
+    <li class="item">
+      <a class="item-main" href="{{ row.view }}">
+        <span class="item-icon">{% if row.icon == "sheet" %}{% include "icons/sheet.svg" %}{% else %}{% include "icons/doc.svg" %}{% endif %}</span>
+        <span class="item-text">
+          <span class="item-title">{{ row.title }}</span>
+          <span class="item-detail">{{ row.detail }}</span>
+        </span>
+      </a>
+      <span class="item-actions">
+        <form method="post" action="/files/{{ row.id }}/restore"><input type="hidden" name="csrf_token" value="{{ shell.csrf }}"><button>Restore</button></form>
+        <form method="post" action="/files/{{ row.id }}/purge" data-confirm="Delete “{{ row.title }}” forever?"><input type="hidden" name="csrf_token" value="{{ shell.csrf }}"><button class="danger">Delete forever</button></form>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</main>
+{% endblock %}

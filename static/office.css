@@ -218,3 +218,51 @@ input[type=text], input[type=search], input:not([type]), select {
   .appbar { display: none; }
   body { background: #fff; color: #000; }
 }
+
+/* Editor pages: app bar, toolbar, scrolling work area, status bar. */
+.icon { flex: none; }
+.foot a { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); text-decoration: none; }
+.foot a:hover { color: var(--text); }
+.editor-page, .view-page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.editor-page .appbar, .view-page .appbar { position: static; }
+.title-input {
+  flex: 1; min-width: 0; max-width: 520px;
+  font-size: 17px !important; font-weight: 600;
+  border-color: transparent !important; background: transparent !important;
+}
+.title-input:hover { border-color: var(--border) !important; }
+.title-input:focus { border-color: var(--accent) !important; background: var(--surface) !important; }
+.save-status { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.save-status.error { color: var(--danger); }
+
+.toolbar {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 6px 12px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.tool-group { display: flex; align-items: center; gap: 2px; padding-right: 6px; margin-right: 2px; border-right: 1px solid var(--border); }
+.tool-group:last-child { border-right: 0; }
+.tool-spacer { flex: 1; }
+.tool {
+  min-width: 32px; width: 32px; height: 32px; min-height: 32px; padding: 0;
+  border-color: transparent; background: transparent; font-size: 15px;
+}
+.tool .icon, .menu .icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tool[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); }
+.tool-select { min-width: 140px; }
+.serif { font-family: Georgia, serif; }
+.statusbar {
+  display: flex; justify-content: space-between; gap: 16px;
+  padding: 4px 16px; font-size: 12px; color: var(--muted);
+  background: var(--surface); border-top: 1px solid var(--border);
+}
+.view-title { font-weight: 600; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.view-detail { font-size: 13px; white-space: nowrap; }
+.view-actions { display: flex; gap: 8px; padding: 8px 16px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+@media (max-width: 760px) {
+  .tool-select { min-width: 0; }
+}
+@media print {
+  .editor-page, .view-page { display: block; height: auto; overflow: visible; }
+  .toolbar, .statusbar, .view-actions, .banner { display: none !important; }
+}
