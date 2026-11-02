@@ -1,6 +1,6 @@
 [package]
-name = "loki-office"
-description = "LOKI Office: documents and more, as one LOKI app."
+name = "office-suite"
+description = "Office Suite: documents and more, as one LOKI app."
 version = "0.1.0"
 edition = "2024"
 authors = ["Aspenini"]
@@ -21,7 +21,7 @@ loki-sdk = { version = "0.3.0", path = "../LOKI/crates/loki-sdk", features = ["t
 
 [package.metadata.loki]
 id = "office"
-name = "LOKI Office"
+name = "Office Suite"
 description = "Write and format documents. More office tools to come."
 health = "/health"
 capabilities = ["database", "forms"]

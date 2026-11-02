@@ -1137,7 +1137,7 @@
   styleSelect.addEventListener("change", () => setBlockStyle(styleSelect.value));
 
   titleInput.addEventListener("input", () => {
-    document.title = (titleInput.value.trim() || "Untitled document") + " · LOKI Office";
+    document.title = (titleInput.value.trim() || "Untitled document") + " · Office Suite";
     changed();
   });
   titleInput.addEventListener("keydown", (event) => {

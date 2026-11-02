@@ -1,4 +1,4 @@
-# LOKI Office
+# Office Suite
 
 An office suite for [LOKI](https://github.com/LOKI-Server/LOKI), packaged as one
 LOKI app (ID `office`). Every tool shares one address, one sign-in, one database

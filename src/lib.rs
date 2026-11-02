@@ -1,4 +1,4 @@
-//! LOKI Office: one LOKI app holding the suite's tools. Each tool is a module
+//! Office Suite: one LOKI app holding the suite's tools. Each tool is a module
 //! with its own routes under its own path; `ui` holds the shared page chrome.
 mod docs;
 mod schema;

@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{% block title %}Home{% endblock %} · LOKI Office</title>
+<title>{% block title %}Home{% endblock %} · Office Suite</title>
 <link rel="stylesheet" href="/static/office.css">
 {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
 <header class="appbar">
-  <a class="brand" href="/" title="LOKI Office home">
-    <span class="brand-mark" aria-hidden="true">LO</span>
-    <span class="brand-name">LOKI Office</span>
+  <a class="brand" href="/" title="Office Suite home">
+    <span class="brand-mark" aria-hidden="true">OS</span>
+    <span class="brand-name">Office Suite</span>
   </a>
   {% if let Some(tool) = shell.tool %}<a class="crumb" href="{{ tool.href }}">{{ tool.name }}</a>{% endif %}
   <div class="appbar-slot">{% block appbar %}{% endblock %}</div>

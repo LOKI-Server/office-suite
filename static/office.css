@@ -1,4 +1,4 @@
-/* LOKI Office — shared look for the suite. Each tool adds its own sheet
+/* Office Suite — shared look for the suite. Each tool adds its own sheet
    and may set --accent on body for its colour. */
 :root {
   color-scheme: light dark;
