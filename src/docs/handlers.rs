@@ -1,11 +1,11 @@
 //! Docs pages and autosave. Listing, trash and file actions are shared in
 //! [`crate::files`].
-use super::model::{Document, IMAGE_TYPES, check_image_name};
+use super::model::{Block, Document, IMAGE_TYPES, check_image_name};
 use super::render;
 use crate::files::{self, Content, Kind, Showing, Stored, VersionItem, owner};
 use crate::ui::{Shell, now_ms, page, script_json};
 use askama::Template;
-use loki_sdk::{Error, Request, Response, Result, StoredFile};
+use loki_sdk::{Database, Error, Request, Response, Result, Statement, StoredFile, params};
 use serde::{Deserialize, Serialize};
 
 const EMPTY_BODY: &str = r#"{"blocks":[]}"#;
@@ -97,8 +97,30 @@ pub fn save(mut request: Request) -> Result<Response> {
 }
 
 pub fn save_document(owner: &str, id: &str, payload: SaveRequest, now: i64) -> Result<Response> {
+    register_images(owner, &payload.body, now)?;
     let content = content(payload.body)?;
     files::save(owner, id, Kind::Doc, payload.version, &payload.title, content, now)
+}
+
+/// Records the document's images for the cleanup job, including ones copied in
+/// from another document or uploaded before images were recorded.
+fn register_images(owner: &str, body: &Document, now: i64) -> Result<()> {
+    let statements = body
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Image { src, .. } if check_image_name(src).is_ok() => Some(Statement::new(
+                "INSERT OR IGNORE INTO images(name,owner,created_at) VALUES(?,?,?)",
+                params![src, owner, now],
+            )),
+            _ => None,
+        })
+        .take(64)
+        .collect::<Result<Vec<_>>>()?;
+    if !statements.is_empty() {
+        Database.transaction(&statements)?;
+    }
+    Ok(())
 }
 
 /// Validates a document and summarizes it for lists and search.
@@ -175,12 +197,25 @@ pub fn upload_image(request: Request) -> Result<Response> {
         return Err(Error::new(413, "Images can be at most 5 MB."));
     }
     let name = format!("{}.{extension}", loki_sdk::random_id());
-    upload.retain(image_path(&owner, &name))?;
+    let kept = upload.retain(image_path(&owner, &name))?;
+    if let Err(error) = Database.execute(
+        "INSERT INTO images(name,owner,created_at) VALUES(?,?,?)",
+        params![name, owner, now_ms()],
+    ) {
+        // Without its record the cleanup job could never find it again.
+        let _ = kept.delete();
+        return Err(error);
+    }
     #[derive(Serialize)]
     struct Uploaded {
         src: String,
     }
     Response::json(&Uploaded { src: name })
+}
+
+/// Deletes one of `owner`'s images, for the cleanup job.
+pub fn delete_image(owner: &str, name: &str) -> Result<()> {
+    StoredFile::at(image_path(owner, name)).delete()
 }
 
 /// `GET /docs/images/{name}`: one of the signed-in person's images.
@@ -197,6 +232,7 @@ mod tests {
     use crate::test_host::{context, host};
     use loki_sdk::{Method, testing};
     use serde_json::json;
+    use std::{cell::RefCell, rc::Rc};
 
     fn payload(version: i64) -> SaveRequest {
         serde_json::from_value(json!({
@@ -252,5 +288,67 @@ mod tests {
             response.headers["content-disposition"],
             "attachment; filename=\"Plan_ Q3 _.md\"; filename*=UTF-8''Plan%3A%20Q3%20%E2%9C%93.md"
         );
+    }
+
+    #[test]
+    fn saving_records_the_documents_images() {
+        let (log, fake) = host(|_| json!({"rows": [], "affected": 1}));
+        let image = "0f8c2c4e-1b2a-4c3d-9e8f-001122334455.png";
+        let request: SaveRequest = serde_json::from_value(json!({
+            "title": "Pics", "version": 1, "body": {"blocks": [{"type": "image", "src": image}]}
+        }))
+        .unwrap();
+        testing::with_host(fake, || save_document("user-1", "doc-1", request, 7).unwrap());
+        let log = log.borrow();
+        assert!(log[0]["sql"].as_str().unwrap().starts_with("INSERT OR IGNORE INTO images"));
+        assert_eq!(log[0]["params"], json!([image, "user-1", 7]));
+    }
+
+    type Calls = Rc<RefCell<Vec<String>>>;
+    type HostResult = std::result::Result<String, String>;
+
+    fn upload_host(database_works: bool) -> (Calls, impl FnMut(&str, &str) -> HostResult) {
+        let calls: Calls = Rc::default();
+        let seen = calls.clone();
+        let fake = move |operation: &str, input: &str| {
+            seen.borrow_mut().push(format!("{operation} {input}"));
+            match operation {
+                "form" => Ok(json!({"fields": {}, "files": [{
+                    "field": "file", "name": "chart.png", "content_type": "image/png", "size": 1000, "token": "t1"
+                }]})
+                .to_string()),
+                "retain-upload" => {
+                    let input: serde_json::Value = serde_json::from_str(input).unwrap();
+                    Ok(json!({"path": input["path"]}).to_string())
+                }
+                "database" if database_works => Ok(json!([{"rows": [], "affected": 1}]).to_string()),
+                "database" => Err(json!({"loki_error": 1, "status": 503, "message": "busy"}).to_string()),
+                "delete-file" | "log" => Ok("null".into()),
+                other => Err(format!("unexpected host call {other}")),
+            }
+        };
+        (calls, fake)
+    }
+
+    #[test]
+    fn uploads_are_kept_in_the_owners_folder_and_recorded() {
+        let (calls, fake) = upload_host(true);
+        let request = testing::request(Method::Post, "/docs/images", context(true));
+        let response = testing::with_host(fake, || crate::router().handle(request).unwrap());
+        let src = serde_json::from_slice::<serde_json::Value>(&response.body).unwrap()["src"].as_str().unwrap().to_string();
+        assert!(check_image_name(&src).is_ok());
+        let calls = calls.borrow();
+        assert!(calls[1].contains(&format!("images/user-1/{src}")), "{}", calls[1]);
+        assert!(calls[2].contains("INSERT INTO images") && calls[2].contains("user-1"));
+    }
+
+    #[test]
+    fn an_upload_without_its_record_is_deleted() {
+        let (calls, fake) = upload_host(false);
+        let request = testing::request(Method::Post, "/docs/images", context(true));
+        let error = testing::with_host(fake, || crate::router().handle(request).unwrap_err());
+        assert_eq!(error.status(), 503);
+        let calls = calls.borrow();
+        assert!(calls[3].starts_with("delete-file") && calls[3].contains("images/user-1/"), "{calls:?}");
     }
 }

@@ -1,6 +1,7 @@
 //! Office Suite: one LOKI app holding the suite's tools. Each tool is a module
 //! with its own routes under its own path; their files share one table
 //! (`files`), and `ui` holds the shared page chrome.
+mod cleanup;
 mod docs;
 mod files;
 mod schema;
@@ -31,6 +32,7 @@ const ASSETS: &[&str] = &[
 pub fn router() -> Router {
     let router = Router::new()
         .get("/health", health)
+        .schedule(cleanup::NAME, cleanup::run)
         .get("/", home)
         .get("/trash", files::trash)
         .post("/trash/empty", files::empty_trash)

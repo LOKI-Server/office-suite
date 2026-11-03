@@ -19,12 +19,19 @@ always before a restore. Each file keeps its latest 30 versions, dropping the
 oldest once they pass 4 MB together. You can open any version read-only and
 restore it; restoring keeps the current content as a version too.
 
+**Daily cleanup** (`src/cleanup.rs`), a job LOKI runs once a day: it deletes
+files that have been in the trash for 30 days, with their versions, and then
+Docs images that no file or saved version uses. Images are recorded when
+they're uploaded or saved in a document, and an unused one is kept for a day
+first, so one added just before a save is never lost.
+
 ## Layout
 
 ```
 src/lib.rs        router, health check, home page, static files
 src/files.rs      the shared files table: lists, search, trash, rename, copy,
                   versioned saves and version history
+src/cleanup.rs    the daily job: expired trash and unused images
 src/schema.rs     tables, created by the health check
 src/ui/           page chrome (Shell, Tool), security headers, helpers
 src/docs/         Docs: model, renderer, pages
@@ -34,12 +41,13 @@ static/           office.css, autosave.js (shared); docs.css, editor.js; sheets.
 tests/            formula engine tests (Node)
 ```
 
-`loki-sdk` 0.3 comes from crates.io, so the app runs on LOKI 0.3 and later. It
-uses LOKI's `database`, `forms` and `uploads` (Docs images) capabilities.
+Built with `loki-sdk` 0.5 from crates.io, so it needs **LOKI 0.5 or later**. It
+uses LOKI's `database`, `forms` and `uploads` (Docs images) capabilities and one
+scheduled job.
 
 ## Building
 
-Needs Rust, the `wasm32-wasip2` target and `cargo-loki` 0.3, plus Node 20+ for
+Needs Rust, the `wasm32-wasip2` target and `cargo-loki` 0.5, plus Node 20+ for
 the formula tests:
 
 ```powershell
@@ -50,7 +58,7 @@ cargo install cargo-loki --locked
 ```powershell
 cargo test                                    # Rust unit tests
 node --test tests/formula.test.js             # formula engine tests
-cargo loki dev --server PATH_TO_LOKI_SERVER   # local LOKI with live rebuilds
+cargo loki dev --server PATH_TO_LOKI_SERVER   # local LOKI 0.5+ with live rebuilds
 cargo loki package                            # writes target/loki/office-0.3.0.loki-app
 ```
 

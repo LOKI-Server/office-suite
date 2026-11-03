@@ -11,13 +11,13 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-loki-sdk = { version = "0.3.0", features = ["templates"] }
+loki-sdk = { version = "0.5.0", features = ["templates"] }
 askama = { version = "0.12", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
-loki-sdk = { version = "0.3.0", features = ["templates", "testing"] }
+loki-sdk = { version = "0.5.0", features = ["templates", "testing"] }
 
 [package.metadata.loki]
 id = "office"
@@ -26,6 +26,11 @@ description = "Write and format documents. More office tools to come."
 health = "/health"
 capabilities = ["database", "forms", "uploads"]
 assets = ["static"]
+
+# Deletes expired trash and unused images once a day (src/cleanup.rs).
+[[package.metadata.loki.schedules]]
+name = "cleanup"
+every_minutes = 1440
 
 [profile.release]
 lto = true

@@ -198,6 +198,24 @@ fn purge_expired(owner: &str, now: i64) -> Result<()> {
     Ok(())
 }
 
+/// Deletes everyone's files that have been in the trash too long, with their
+/// versions, for the cleanup job. Returns how many files went.
+pub fn purge_all_expired(now: i64) -> Result<u64> {
+    let cutoff = now - TRASH_DAYS * DAY_MS;
+    let results = Database.transaction(&[
+        Statement::new(
+            "DELETE FROM file_versions WHERE file_id IN
+             (SELECT id FROM files WHERE trashed_at IS NOT NULL AND trashed_at<?)",
+            params![cutoff],
+        )?,
+        Statement::new(
+            "DELETE FROM files WHERE trashed_at IS NOT NULL AND trashed_at<?",
+            params![cutoff],
+        )?,
+    ])?;
+    Ok(results.get(1).map_or(0, |r| r.affected))
+}
+
 /// Copies a file's current content into its versions; callers append conditions.
 const KEEP_VERSION: &str = "INSERT INTO file_versions(file_id,owner,title,info,saved_at,created_at,body)
      SELECT id,owner,title,info,updated_at,?,body FROM files WHERE id=? AND owner=?";

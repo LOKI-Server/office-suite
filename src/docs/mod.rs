@@ -8,7 +8,7 @@ use crate::ui::Tool;
 use handlers::*;
 use loki_sdk::Router;
 
-pub use handlers::{content, show};
+pub use handlers::{content, delete_image, show};
 
 pub static DOCS: Tool = Tool {
     name: "Docs",

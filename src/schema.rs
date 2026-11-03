@@ -33,6 +33,13 @@ const STATEMENTS: &[&str] = &[
         body TEXT NOT NULL
     )",
     "CREATE INDEX IF NOT EXISTS file_versions_by_file ON file_versions(file_id, id)",
+    // Docs images kept as uploads. LOKI can't list an app's uploads, so the
+    // daily cleanup finds unused ones here.
+    "CREATE TABLE IF NOT EXISTS images(
+        name TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+    )",
     // Docs 0.1 kept documents in a table of their own: move any into `files`.
     "CREATE TABLE IF NOT EXISTS documents(
         id TEXT PRIMARY KEY,
