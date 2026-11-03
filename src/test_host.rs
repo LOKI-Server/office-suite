@@ -41,7 +41,7 @@ pub fn host(
                 Ok(Value::Array(results).to_string())
             }
             "form" => Ok(json!({"fields": {"title": "  New name "}, "files": []}).to_string()),
-            "log" => Ok("null".into()),
+            "log" | "file" | "delete-file" => Ok("null".into()),
             other => Err(format!("unexpected host call {other}")),
         }
     };

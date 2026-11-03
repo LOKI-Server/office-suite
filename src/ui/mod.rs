@@ -4,5 +4,5 @@ mod shell;
 mod time;
 
 pub use json::script_json;
-pub use shell::{Shell, Tool, page};
+pub use shell::{Shell, Tool, display_name, page};
 pub use time::{now_ms, relative_time};

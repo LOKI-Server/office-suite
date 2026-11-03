@@ -95,8 +95,11 @@ struct Summary {
     info: String,
     updated_at: i64,
     trashed_at: Option<i64>,
+    #[serde(default)]
+    shared: i64,
 }
-const SUMMARY: &str = "SELECT id,kind,title,excerpt,info,updated_at,trashed_at FROM files";
+const SUMMARY: &str = "SELECT id,kind,title,excerpt,info,updated_at,trashed_at,
+    (SELECT COUNT(*) FROM shares WHERE file_id=id) AS shared FROM files";
 
 /// A file in a list, ready to display.
 pub struct Row {
@@ -110,6 +113,8 @@ pub struct Row {
     pub href: String,
     pub view: String,
     pub exports: Vec<(&'static str, String)>,
+    /// Whether the owner shares it by link.
+    pub shared: bool,
 }
 impl Row {
     fn new(summary: Summary, now: i64) -> Self {
@@ -149,6 +154,7 @@ impl Row {
             detail,
             icon: tool.icon,
             empty: tool.empty,
+            shared: summary.shared > 0,
         }
     }
 }
@@ -174,19 +180,55 @@ pub fn list(owner: &str, kind: Option<Kind>, query: &str, limit: i64) -> Result<
     Ok(rows.into_iter().map(|r| Row::new(r, now)).collect())
 }
 
+/// Statements deleting the files `selection` (SQL selecting file ids) picks,
+/// with their versions and shares; the files go last.
+fn deleting(selection: &str, values: &[Value]) -> Result<Vec<Statement>> {
+    ["file_versions", "share_access", "shares"]
+        .iter()
+        .map(|table| Statement::new(format!("DELETE FROM {table} WHERE file_id IN ({selection})"), values))
+        .chain([Statement::new(format!("DELETE FROM files WHERE id IN ({selection})"), values)])
+        .collect()
+}
+
+/// Files others shared with `user` that they have opened, most recently opened first.
+pub fn shared_with(user: &str, limit: i64) -> Result<Vec<Row>> {
+    #[derive(Deserialize)]
+    struct Shared {
+        #[serde(flatten)]
+        summary: Summary,
+        role: String,
+        owner_name: String,
+    }
+    let rows: Vec<Shared> = Database.fetch_all(
+        "SELECT f.id,f.kind,f.title,f.excerpt,f.info,f.updated_at,f.trashed_at,s.role,s.owner_name
+         FROM share_access a
+         JOIN shares s ON s.file_id=a.file_id AND s.token=a.token
+         JOIN files f ON f.id=a.file_id
+         WHERE a.user_id=? AND f.owner<>? AND f.trashed_at IS NULL
+         ORDER BY a.opened_at DESC LIMIT ?",
+        params![user, user, limit],
+    )?;
+    let now = now_ms();
+    Ok(rows
+        .into_iter()
+        .map(|shared| {
+            let mut row = Row::new(shared.summary, now);
+            let by = if shared.owner_name.is_empty() { "someone" } else { &shared.owner_name };
+            let role = if shared.role == "edit" { "can edit" } else { "view only" };
+            row.detail = format!("Shared by {by} · {role} · {}", row.detail.to_lowercase());
+            row
+        })
+        .collect())
+}
+
 /// Deletes the owner's files matching `filter` (SQL over `files`, after
-/// `owner=?`) together with their versions, returning how many files went.
+/// `owner=?`) together with their versions and shares, returning how many files went.
 fn delete_files(owner: &str, filter: &str, values: Vec<Value>) -> Result<u64> {
     let mut all: Vec<Value> = vec![owner.into()];
     all.extend(values);
-    let results = Database.transaction(&[
-        Statement::new(
-            format!("DELETE FROM file_versions WHERE file_id IN (SELECT id FROM files WHERE owner=? AND {filter})"),
-            &all,
-        )?,
-        Statement::new(format!("DELETE FROM files WHERE owner=? AND {filter}"), &all)?,
-    ])?;
-    Ok(results.get(1).map_or(0, |r| r.affected))
+    let statements = deleting(&format!("SELECT id FROM files WHERE owner=? AND {filter}"), &all)?;
+    let results = Database.transaction(&statements)?;
+    Ok(results.last().map_or(0, |r| r.affected))
 }
 
 fn purge_expired(owner: &str, now: i64) -> Result<()> {
@@ -201,19 +243,13 @@ fn purge_expired(owner: &str, now: i64) -> Result<()> {
 /// Deletes everyone's files that have been in the trash too long, with their
 /// versions, for the cleanup job. Returns how many files went.
 pub fn purge_all_expired(now: i64) -> Result<u64> {
-    let cutoff = now - TRASH_DAYS * DAY_MS;
-    let results = Database.transaction(&[
-        Statement::new(
-            "DELETE FROM file_versions WHERE file_id IN
-             (SELECT id FROM files WHERE trashed_at IS NOT NULL AND trashed_at<?)",
-            params![cutoff],
-        )?,
-        Statement::new(
-            "DELETE FROM files WHERE trashed_at IS NOT NULL AND trashed_at<?",
-            params![cutoff],
-        )?,
-    ])?;
-    Ok(results.get(1).map_or(0, |r| r.affected))
+    let cutoff: Value = (now - TRASH_DAYS * DAY_MS).into();
+    let statements = deleting(
+        "SELECT id FROM files WHERE trashed_at IS NOT NULL AND trashed_at<?",
+        &[cutoff],
+    )?;
+    let results = Database.transaction(&statements)?;
+    Ok(results.last().map_or(0, |r| r.affected))
 }
 
 /// Copies a file's current content into its versions; callers append conditions.
@@ -256,14 +292,6 @@ pub struct Stored {
     body: String,
 }
 impl Stored {
-    pub fn load(owner: &str, id: &str, kind: Kind) -> Result<Self> {
-        Database
-            .fetch_optional(
-                "SELECT id,title,version,info,updated_at,trashed_at,body FROM files WHERE id=? AND owner=? AND kind=?",
-                params![id, owner, kind.as_str()],
-            )?
-            .ok_or_else(not_found)
-    }
     pub fn body<T: DeserializeOwned>(&self) -> Result<T> {
         serde_json::from_str(&self.body)
             .map_err(|e| Error::internal(format!("Stored file {} is unreadable: {e}", self.id)))
@@ -272,6 +300,106 @@ impl Stored {
     pub fn detail(&self) -> String {
         let edited = format!("Edited {}", relative_time(self.updated_at, now_ms()).to_lowercase());
         if self.info.is_empty() { edited } else { format!("{edited} · {}", self.info) }
+    }
+}
+
+/// What someone may do with a file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Owner,
+    Edit,
+    View,
+}
+
+/// Someone's access to a file: theirs, or shared with them by a link they opened.
+#[derive(Clone, Debug)]
+pub struct Access {
+    /// The file's owner, whose rows the file's queries use.
+    pub owner: String,
+    pub role: Role,
+    /// The owner's name, for people the file is shared with.
+    pub shared_by: String,
+}
+impl Access {
+    pub fn can_edit(&self) -> bool {
+        self.role != Role::View
+    }
+    pub fn is_owner(&self) -> bool {
+        self.role == Role::Owner
+    }
+    /// "Shared by Ada · can edit", or nothing for the owner.
+    pub fn label(&self) -> String {
+        match self.role {
+            Role::Owner => String::new(),
+            Role::Edit => format!("Shared by {} · can edit", self.shared_by),
+            Role::View => format!("Shared by {} · view only", self.shared_by),
+        }
+    }
+}
+
+/// SQL true when `user` (a `?` after the file id's) may open file `f`, joined to
+/// its share `s`: they own it, or opened its link since the token last changed.
+pub const MAY_OPEN: &str = "(f.owner=? OR (f.trashed_at IS NULL AND s.role IS NOT NULL AND EXISTS
+    (SELECT 1 FROM share_access a WHERE a.file_id=f.id AND a.user_id=? AND a.token=s.token)))";
+
+#[derive(Deserialize)]
+struct AccessRow {
+    owner: String,
+    role: Option<String>,
+    owner_name: Option<String>,
+}
+impl AccessRow {
+    fn access(self, user: &str) -> Access {
+        let role = if self.owner == user {
+            Role::Owner
+        } else if self.role.as_deref() == Some("edit") {
+            Role::Edit
+        } else {
+            Role::View
+        };
+        Access {
+            owner: self.owner,
+            role,
+            shared_by: self.owner_name.filter(|n| !n.is_empty()).unwrap_or_else(|| "someone".into()),
+        }
+    }
+}
+
+/// `user`'s access to file `id`, or not found.
+pub fn access(user: &str, id: &str, kind: Kind) -> Result<Access> {
+    let row: AccessRow = Database
+        .fetch_optional(
+            &format!(
+                "SELECT f.owner,s.role,s.owner_name FROM files f LEFT JOIN shares s ON s.file_id=f.id
+                 WHERE f.id=? AND f.kind=? AND {MAY_OPEN}"
+            ),
+            params![id, kind.as_str(), user, user],
+        )?
+        .ok_or_else(not_found)?;
+    Ok(row.access(user))
+}
+
+impl Stored {
+    /// File `id` with `user`'s access to it, if they may open it.
+    pub fn open(user: &str, id: &str, kind: Kind) -> Result<(Self, Access)> {
+        #[derive(Deserialize)]
+        struct Opened {
+            #[serde(flatten)]
+            access: AccessRow,
+            #[serde(flatten)]
+            stored: Stored,
+        }
+        let opened: Opened = Database
+            .fetch_optional(
+                &format!(
+                    "SELECT f.id,f.title,f.version,f.info,f.updated_at,f.trashed_at,f.owner,s.role,s.owner_name,f.body
+                     FROM files f LEFT JOIN shares s ON s.file_id=f.id
+                     WHERE f.id=? AND f.kind=? AND {MAY_OPEN}"
+                ),
+                params![id, kind.as_str(), user, user],
+            )?
+            .ok_or_else(not_found)?;
+        Ok((opened.stored, opened.access.access(user)))
     }
 }
 
@@ -501,6 +629,10 @@ pub struct Showing {
     body: String,
     /// Set when showing an earlier version.
     pub version: Option<VersionItem>,
+    pub can_edit: bool,
+    pub owner: bool,
+    /// "Shared by Ada · view only", for people the file is shared with.
+    pub shared: String,
 }
 impl Showing {
     pub fn body<T: DeserializeOwned>(&self) -> Result<T> {
@@ -509,13 +641,16 @@ impl Showing {
     }
 }
 impl Stored {
-    pub fn showing(self) -> Showing {
+    pub fn showing(self, access: &Access) -> Showing {
         Showing {
             detail: self.detail(),
             id: self.id,
             title: self.title,
             body: self.body,
             version: None,
+            can_edit: access.can_edit(),
+            owner: access.is_owner(),
+            shared: access.label(),
         }
     }
 }
@@ -650,6 +785,9 @@ pub fn show_version(request: Request) -> Result<Response> {
             detail,
             body: found.body,
             version: Some(item),
+            can_edit: true,
+            owner: true,
+            shared: String::new(),
         },
     )
 }
@@ -816,7 +954,9 @@ mod tests {
         let log = log.borrow();
         assert!(log[0]["sql"].as_str().unwrap().starts_with("DELETE FROM file_versions WHERE file_id IN"));
         assert_eq!(log[0]["params"], json!(["user-1", "f-1"]));
-        assert!(log[1]["sql"].as_str().unwrap().starts_with("DELETE FROM files"));
+        assert!(log[1]["sql"].as_str().unwrap().starts_with("DELETE FROM share_access"));
+        assert!(log[2]["sql"].as_str().unwrap().starts_with("DELETE FROM shares"));
+        assert!(log[3]["sql"].as_str().unwrap().starts_with("DELETE FROM files"));
     }
 
     #[test]

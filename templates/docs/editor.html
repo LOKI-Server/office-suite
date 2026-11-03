@@ -5,6 +5,7 @@
 {% block appbar %}
 <input id="doc-title" class="title-input" value="{{ title }}" maxlength="200" aria-label="Document title" autocomplete="off" spellcheck="false">
 <span id="save-status" class="save-status" role="status" aria-live="polite">Saved</span>
+{% if owner %}<a class="btn" href="/files/{{ id }}/share">Share</a>{% else %}<span class="badge shared-label">{{ shared }}</span>{% endif %}
 {% endblock %}
 {% block main %}
 <div class="toolbar" role="toolbar" aria-label="Formatting">
@@ -73,7 +74,7 @@
       <div class="menu-panel">
         <a href="/docs/{{ id }}/export.md">Download as Markdown</a>
         <a href="/docs/{{ id }}/export.html">Download as HTML</a>
-        <a href="/files/{{ id }}/versions">Version history</a>
+        {% if owner %}<a href="/files/{{ id }}/versions">Version history</a>{% endif %}
       </div>
     </details>
   </div>

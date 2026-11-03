@@ -5,6 +5,7 @@ mod cleanup;
 mod docs;
 mod files;
 mod schema;
+mod sharing;
 mod sheets;
 #[cfg(test)]
 mod test_host;
@@ -44,6 +45,10 @@ pub fn router() -> Router {
         .get("/files/{id}/versions", files::versions)
         .get("/files/{id}/versions/{version}", files::show_version)
         .post("/files/{id}/versions/{version}/restore", files::restore_version)
+        .get("/files/{id}/share", sharing::settings)
+        .post("/files/{id}/share", sharing::update)
+        .get("/shared/{token}", sharing::open_link)
+        .post("/shared/{id}/forget", sharing::forget)
         .get("/static/{file}", asset);
     sheets::routes(docs::routes(router))
 }
@@ -68,6 +73,8 @@ struct HomePage {
     tools: &'static [&'static ui::Tool],
     query: String,
     rows: Vec<files::Row>,
+    /// Files others shared with this person, when not searching.
+    shared: Vec<files::Row>,
 }
 
 /// The suite's home: a "New" button per tool, then recent files or search results.
@@ -79,6 +86,7 @@ fn home(request: Request) -> Result<Response> {
         shell: ui::Shell::new(&request, None)?,
         tools: &TOOLS,
         rows: files::list(&owner, None, &query, limit)?,
+        shared: if query.is_empty() { files::shared_with(&owner, RECENT_LIMIT)? } else { Vec::new() },
         query,
     })?)
 }

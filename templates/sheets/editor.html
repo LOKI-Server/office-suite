@@ -5,6 +5,7 @@
 {% block appbar %}
 <input id="doc-title" class="title-input" value="{{ title }}" maxlength="200" aria-label="Spreadsheet title" autocomplete="off" spellcheck="false">
 <span id="save-status" class="save-status" role="status" aria-live="polite">Saved</span>
+{% if owner %}<a class="btn" href="/files/{{ id }}/share">Share</a>{% else %}<span class="badge shared-label">{{ shared }}</span>{% endif %}
 {% endblock %}
 {% block main %}
 <div class="toolbar" role="toolbar" aria-label="Formatting">
@@ -67,7 +68,7 @@
     <label class="btn subtle file-button" title="Load a CSV file into this spreadsheet">Import CSV<input type="file" id="import-csv" accept=".csv,text/csv,.tsv,text/tab-separated-values" hidden></label>
     <a class="btn subtle" href="/sheets/{{ id }}/view" title="Read-only view for printing">Print view</a>
     <a class="btn subtle" id="export-csv" href="/sheets/{{ id }}/export.csv">Download CSV</a>
-    <a class="btn subtle" href="/files/{{ id }}/versions">Version history</a>
+    {% if owner %}<a class="btn subtle" href="/files/{{ id }}/versions">Version history</a>{% endif %}
   </div>
 </div>
 <div class="formula-bar">

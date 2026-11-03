@@ -2,10 +2,10 @@
 //! shared in [`crate::files`].
 use super::model::{Sheet, Workbook, col_name};
 use super::render;
-use crate::files::{self, Content, Kind, Showing, Stored, VersionItem, owner};
+use crate::files::{self, Access, Content, Kind, Showing, Stored, VersionItem, owner};
 use crate::ui::{Shell, now_ms, page, script_json};
 use askama::Template;
-use loki_sdk::{Request, Response, Result};
+use loki_sdk::{Error, Request, Response, Result};
 use serde::{Deserialize, Serialize};
 
 const EXCERPT_CHARS: usize = 160;
@@ -13,8 +13,9 @@ const EXCERPT_CHARS: usize = 160;
 fn shell(request: &Request) -> Result<Shell> {
     Shell::new(request, Some(&super::SHEETS))
 }
-fn load(request: &Request) -> Result<Stored> {
-    Stored::load(&owner(request)?, request.param("id")?, Kind::Sheet)
+/// The routed spreadsheet, if the signed-in person may open it.
+fn open(request: &Request) -> Result<(Stored, Access)> {
+    Stored::open(&owner(request)?, request.param("id")?, Kind::Sheet)
 }
 fn info(cells: usize, tabs: usize) -> String {
     let cells = if cells == 1 { "1 cell".into() } else { format!("{cells} cells") };
@@ -36,6 +37,9 @@ struct EditorPage {
     id: String,
     title: String,
     data: String,
+    owner: bool,
+    /// "Shared by Ada · can edit", for people the spreadsheet is shared with.
+    shared: String,
 }
 
 struct ViewCell {
@@ -60,6 +64,9 @@ struct ViewPage {
     rows: Vec<(u32, Vec<ViewCell>)>,
     /// Set when showing an earlier version.
     version: Option<VersionItem>,
+    can_edit: bool,
+    owner: bool,
+    shared: String,
 }
 
 pub fn home(request: Request) -> Result<Response> {
@@ -73,9 +80,12 @@ pub fn create(request: Request) -> Result<Response> {
 }
 
 pub fn editor(request: Request) -> Result<Response> {
-    let stored = load(&request)?;
+    let (stored, access) = open(&request)?;
     if stored.trashed_at.is_some() {
         return Response::redirect("/trash");
+    }
+    if !access.can_edit() {
+        return Response::redirect(&format!("/sheets/{}/view", stored.id));
     }
     #[derive(Serialize)]
     struct Data<'a> {
@@ -97,6 +107,8 @@ pub fn editor(request: Request) -> Result<Response> {
         id: stored.id,
         title: stored.title,
         data,
+        owner: access.is_owner(),
+        shared: access.label(),
     })?)
 }
 
@@ -109,10 +121,14 @@ pub struct SaveRequest {
 
 /// Autosave: `POST /api/sheets/{id}` with a JSON [`SaveRequest`] and `X-CSRF-Token`.
 pub fn save(mut request: Request) -> Result<Response> {
-    let owner = owner(&request)?;
+    let user = owner(&request)?;
     let id = request.param("id")?.to_string();
+    let access = files::access(&user, &id, Kind::Sheet)?;
+    if !access.can_edit() {
+        return Err(Error::forbidden());
+    }
     let payload: SaveRequest = request.json(files::MAX_SAVE_BYTES)?;
-    save_sheet(&owner, &id, payload, now_ms())
+    save_sheet(&access.owner, &id, payload, now_ms())
 }
 
 pub fn save_sheet(owner: &str, id: &str, payload: SaveRequest, now: i64) -> Result<Response> {
@@ -156,7 +172,8 @@ pub fn content(mut book: Workbook) -> Result<Content> {
 }
 
 pub fn view(request: Request) -> Result<Response> {
-    show(&request, load(&request)?.showing())
+    let (stored, access) = open(&request)?;
+    show(&request, stored.showing(&access))
 }
 
 /// Column names and widths, the table width, and numbered rows of cells.
@@ -205,12 +222,15 @@ pub fn show(request: &Request, showing: Showing) -> Result<Response> {
         id: showing.id,
         title: showing.title,
         version: showing.version,
+        can_edit: showing.can_edit,
+        owner: showing.owner,
+        shared: showing.shared,
     })?)
 }
 
 /// `GET /sheets/{id}/export.csv?tab=N`: one tab as CSV, the first by default.
 pub fn export_csv(request: Request) -> Result<Response> {
-    let stored = load(&request)?;
+    let (stored, _) = open(&request)?;
     let book: Workbook = stored.body()?;
     let tab = chosen_tab(&request, &book);
     let csv = render::to_csv(&book.tabs[tab]);
@@ -274,7 +294,7 @@ mod tests {
                                {"name":"B","cells":{"B2":{"input":"=2+2","value":4}}}]}"#;
         let (log, fake) = host(move |_| {
             json!({"rows": [{
-                "id": "s-1", "title": "Q3", "version": 1, "info": "", "updated_at": 0, "trashed_at": null, "body": body
+                "id": "s-1", "owner": "user-1", "title": "Q3", "version": 1, "info": "", "updated_at": 0, "trashed_at": null, "body": body
             }], "affected": 0})
         });
         let request = testing::request(Method::Get, "/sheets/s-1/export.csv?tab=1", context(true));
@@ -282,14 +302,14 @@ mod tests {
         assert_eq!(String::from_utf8(response.body).unwrap(), ",\r\n,4\r\n");
         assert_eq!(response.headers["content-type"], "text/csv; charset=utf-8");
         assert!(response.headers["content-disposition"].contains("Q3 - B.csv"));
-        assert_eq!(log.borrow()[0]["params"], json!(["s-1", "user-1", "sheet"]));
+        assert_eq!(log.borrow()[0]["params"], json!(["s-1", "sheet", "user-1", "user-1"]));
     }
 
     #[test]
     fn spreadsheets_from_before_tabs_still_export() {
         let (_, fake) = host(|_| {
             json!({"rows": [{
-                "id": "s-1", "title": "Old", "version": 1, "info": "", "updated_at": 0, "trashed_at": null,
+                "id": "s-1", "owner": "user-1", "title": "Old", "version": 1, "info": "", "updated_at": 0, "trashed_at": null,
                 "body": r#"{"rows":10,"cols":5,"cells":{"A1":{"input":"x","value":"x"}}}"#
             }], "affected": 0})
         });

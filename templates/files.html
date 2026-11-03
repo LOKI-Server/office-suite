@@ -30,7 +30,7 @@
       <a class="item-main" href="{{ row.href }}">
         <span class="item-icon">{% if row.icon == "sheet" %}{% include "icons/sheet.svg" %}{% else %}{% include "icons/doc.svg" %}{% endif %}</span>
         <span class="item-text">
-          <span class="item-title">{{ row.title }}</span>
+          <span class="item-title">{{ row.title }}{% if row.shared %} <span class="badge">Shared</span>{% endif %}</span>
           <span class="item-detail">{% if row.excerpt.is_empty() %}{{ row.empty }}{% else %}{{ row.excerpt }}{% endif %}</span>
         </span>
       </a>
@@ -44,6 +44,7 @@
             <button>Rename</button>
           </form>
           <hr>
+          <a href="/files/{{ row.id }}/share">Share…</a>
           <a href="{{ row.view }}">Open read-only</a>
           <a href="/files/{{ row.id }}/versions">Version history</a>
           {% for (label, href) in row.exports %}<a href="{{ href }}">Download as {{ label }}</a>{% endfor %}

@@ -40,7 +40,7 @@ impl Shell {
 }
 
 /// The name to show for a person: their profile name, else their username.
-fn display_name(user: &User) -> String {
+pub fn display_name(user: &User) -> String {
     let name = user.name.trim();
     if name.is_empty() {
         user.username.clone()

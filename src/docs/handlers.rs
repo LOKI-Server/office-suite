@@ -2,7 +2,7 @@
 //! [`crate::files`].
 use super::model::{Block, Document, IMAGE_TYPES, check_image_name};
 use super::render;
-use crate::files::{self, Content, Kind, Showing, Stored, VersionItem, owner};
+use crate::files::{self, Access, Content, Kind, Showing, Stored, VersionItem, owner};
 use crate::ui::{Shell, now_ms, page, script_json};
 use askama::Template;
 use loki_sdk::{Database, Error, Request, Response, Result, Statement, StoredFile, params};
@@ -17,8 +17,9 @@ const IMAGES: &str = "/docs/images/";
 fn shell(request: &Request) -> Result<Shell> {
     Shell::new(request, Some(&super::DOCS))
 }
-fn load(request: &Request) -> Result<Stored> {
-    Stored::load(&owner(request)?, request.param("id")?, Kind::Doc)
+/// The routed document, if the signed-in person may open it.
+fn open(request: &Request) -> Result<(Stored, Access)> {
+    Stored::open(&owner(request)?, request.param("id")?, Kind::Doc)
 }
 fn words(count: usize) -> String {
     if count == 1 { "1 word".into() } else { format!("{count} words") }
@@ -31,6 +32,9 @@ struct EditorPage {
     id: String,
     title: String,
     data: String,
+    owner: bool,
+    /// "Shared by Ada · can edit", for people the document is shared with.
+    shared: String,
 }
 #[derive(Template)]
 #[template(path = "docs/view.html")]
@@ -42,6 +46,9 @@ struct ViewPage {
     detail: String,
     /// Set when showing an earlier version.
     version: Option<VersionItem>,
+    can_edit: bool,
+    owner: bool,
+    shared: String,
 }
 
 pub fn home(request: Request) -> Result<Response> {
@@ -54,9 +61,12 @@ pub fn create(request: Request) -> Result<Response> {
 }
 
 pub fn editor(request: Request) -> Result<Response> {
-    let stored = load(&request)?;
+    let (stored, access) = open(&request)?;
     if stored.trashed_at.is_some() {
         return Response::redirect("/trash");
+    }
+    if !access.can_edit() {
+        return Response::redirect(&format!("/docs/{}/view", stored.id));
     }
     #[derive(Serialize)]
     struct Data<'a> {
@@ -78,6 +88,8 @@ pub fn editor(request: Request) -> Result<Response> {
         id: stored.id,
         title: stored.title,
         data,
+        owner: access.is_owner(),
+        shared: access.label(),
     })?)
 }
 
@@ -90,10 +102,14 @@ pub struct SaveRequest {
 
 /// Autosave: `POST /api/docs/{id}` with a JSON [`SaveRequest`] and `X-CSRF-Token`.
 pub fn save(mut request: Request) -> Result<Response> {
-    let owner = owner(&request)?;
+    let user = owner(&request)?;
     let id = request.param("id")?.to_string();
+    let access = files::access(&user, &id, Kind::Doc)?;
+    if !access.can_edit() {
+        return Err(Error::forbidden());
+    }
     let payload: SaveRequest = request.json(files::MAX_SAVE_BYTES)?;
-    save_document(&owner, &id, payload, now_ms())
+    save_document(&access.owner, &id, payload, now_ms())
 }
 
 pub fn save_document(owner: &str, id: &str, payload: SaveRequest, now: i64) -> Result<Response> {
@@ -136,7 +152,8 @@ pub fn content(mut body: Document) -> Result<Content> {
 }
 
 pub fn view(request: Request) -> Result<Response> {
-    show(&request, load(&request)?.showing())
+    let (stored, access) = open(&request)?;
+    show(&request, stored.showing(&access))
 }
 
 /// The read-only page, for the document now or an earlier version.
@@ -148,11 +165,14 @@ pub fn show(request: &Request, showing: Showing) -> Result<Response> {
         id: showing.id,
         title: showing.title,
         version: showing.version,
+        can_edit: showing.can_edit,
+        owner: showing.owner,
+        shared: showing.shared,
     })?)
 }
 
 pub fn export_markdown(request: Request) -> Result<Response> {
-    let stored = load(&request)?;
+    let (stored, _) = open(&request)?;
     let markdown = render::to_markdown(&stored.title, &stored.body()?, &absolute_images(&request));
     files::attachment(
         Response::text(markdown).header("content-type", "text/markdown; charset=utf-8")?,
@@ -162,7 +182,7 @@ pub fn export_markdown(request: Request) -> Result<Response> {
 }
 
 pub fn export_html(request: Request) -> Result<Response> {
-    let stored = load(&request)?;
+    let (stored, _) = open(&request)?;
     let html = render::to_html_file(&stored.title, &stored.body()?, &absolute_images(&request));
     files::attachment(
         Response::html(html).header("content-security-policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")?,
@@ -218,12 +238,35 @@ pub fn delete_image(owner: &str, name: &str) -> Result<()> {
     StoredFile::at(image_path(owner, name)).delete()
 }
 
-/// `GET /docs/images/{name}`: one of the signed-in person's images.
+/// `GET /docs/images/{name}`: an image the signed-in person uploaded, or one in
+/// a document they may open, whoever uploaded it.
 pub fn image(request: Request) -> Result<Response> {
-    let owner = owner(&request)?;
+    let user = owner(&request)?;
     let name = request.param("name")?;
-    check_image_name(name).map_err(|_| Error::not_found("No such image."))?;
-    StoredFile::at(image_path(&owner, name)).inline(name)
+    let missing = || Error::not_found("No such image.");
+    check_image_name(name).map_err(|_| missing())?;
+    #[derive(Deserialize)]
+    struct Found {
+        owner: String,
+    }
+    // Images from before they were recorded live in their uploader's folder.
+    let uploader = Database
+        .fetch_optional::<Found>("SELECT owner FROM images WHERE name=?", params![name])?
+        .map_or_else(|| user.clone(), |found| found.owner);
+    if uploader != user {
+        let visible = Database.fetch_optional::<serde_json::Value>(
+            &format!(
+                "SELECT 1 AS ok FROM files f LEFT JOIN shares s ON s.file_id=f.id
+                 WHERE f.kind='doc' AND instr(f.body,?)>0 AND {} LIMIT 1",
+                files::MAY_OPEN
+            ),
+            params![name, user, user],
+        )?;
+        if visible.is_none() {
+            return Err(missing());
+        }
+    }
+    StoredFile::at(image_path(&uploader, name)).inline(name)
 }
 
 #[cfg(test)]
@@ -270,14 +313,14 @@ mod tests {
         let request = testing::request(Method::Get, "/docs/doc-1", context(true));
         let error = testing::with_host(fake, || crate::router().handle(request).unwrap_err());
         assert_eq!(error.status(), 404);
-        assert_eq!(log.borrow()[0]["params"], json!(["doc-1", "user-1", "doc"]));
+        assert_eq!(log.borrow()[0]["params"], json!(["doc-1", "doc", "user-1", "user-1"]));
     }
 
     #[test]
     fn markdown_export_is_an_attachment() {
         let (_, fake) = host(|_| {
             json!({"rows": [{
-                "id": "doc-1", "title": "Plan: Q3 ✓", "version": 1, "info": "1 word", "updated_at": 0, "trashed_at": null,
+                "id": "doc-1", "owner": "user-1", "title": "Plan: Q3 ✓", "version": 1, "info": "1 word", "updated_at": 0, "trashed_at": null,
                 "body": r#"{"blocks":[{"type":"paragraph","runs":[{"text":"Hi"}]}]}"#
             }], "affected": 0})
         });

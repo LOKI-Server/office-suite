@@ -271,3 +271,24 @@ input[type=text], input[type=search], input:not([type]), select {
 .item.current .item-title { color: var(--accent); }
 .version-banner { background: var(--accent-soft); }
 .version-banner form { margin: 0; }
+
+/* Sharing */
+.badge {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600;
+  vertical-align: middle; white-space: nowrap;
+}
+.shared-label { flex: none; }
+.page.narrow { max-width: 680px; }
+.share-form fieldset { border: 0; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 8px; }
+.share-form legend { font-weight: 600; margin-bottom: 8px; }
+.choice {
+  display: flex; gap: 12px; align-items: flex-start; padding: 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+}
+.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.choice > span { display: flex; flex-direction: column; gap: 2px; }
+.choice input { margin-top: 3px; }
+.share-link { margin-top: 24px; }
+.copy-row { display: flex; gap: 8px; }
+.copy-row input { flex: 1; min-width: 0; font-family: var(--mono); font-size: 13px; }

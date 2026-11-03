@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Share · {{ title }}{% endblock %}
+{% block head %}<script src="/static/app.js" defer></script>{% endblock %}
+{% block main %}
+<main class="page narrow">
+  <div class="page-head">
+    <h1>Share “{{ title }}”</h1>
+    <a class="btn" href="{{ href }}">Back to the {{ noun }}</a>
+  </div>
+  <form class="share-form" method="post" action="/files/{{ id }}/share">
+    <input type="hidden" name="csrf_token" value="{{ shell.csrf }}">
+    <fieldset>
+      <legend>Who can open this {{ noun }}</legend>
+      <label class="choice"><input type="radio" name="mode" value="off"{% if role == "off" %} checked{% endif %}>
+        <span><strong>Only you</strong><span class="muted">Nobody else can open it.</span></span></label>
+      <label class="choice"><input type="radio" name="mode" value="view"{% if role == "view" %} checked{% endif %}>
+        <span><strong>People with the link can view</strong><span class="muted">Anyone with access to Office Suite who opens the link.</span></span></label>
+      <label class="choice"><input type="radio" name="mode" value="edit"{% if role == "edit" %} checked{% endif %}>
+        <span><strong>People with the link can edit</strong><span class="muted">They can change the content and title, but not delete, share or restore versions.</span></span></label>
+    </fieldset>
+    <button class="primary">Save</button>
+  </form>
+  {% if !link.is_empty() %}
+  <section class="share-link" aria-labelledby="link-heading">
+    <h2 id="link-heading" class="section-title">Link</h2>
+    <div class="copy-row">
+      <input id="share-link" value="{{ link }}" readonly aria-label="Share link">
+      <button type="button" data-copy="share-link">Copy link</button>
+    </div>
+    <p class="muted">People who open it see this {{ noun }} under “Shared with you” on their home page.</p>
+    <form method="post" action="/files/{{ id }}/share" data-confirm="Make a new link? The current one stops working, and people who opened it lose access until they get the new one.">
+      <input type="hidden" name="csrf_token" value="{{ shell.csrf }}">
+      <input type="hidden" name="mode" value="{{ role }}">
+      <input type="hidden" name="reset" value="1">
+      <button class="danger">Make a new link</button>
+    </form>
+  </section>
+  {% endif %}
+</main>
+{% endblock %}

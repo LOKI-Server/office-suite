@@ -33,6 +33,25 @@ const STATEMENTS: &[&str] = &[
         body TEXT NOT NULL
     )",
     "CREATE INDEX IF NOT EXISTS file_versions_by_file ON file_versions(file_id, id)",
+    // A file shared by link: anyone with access to the app who opens
+    // `/shared/{token}` may `role` ('view' or 'edit') it. A new token cuts
+    // off everyone who came in through the old one.
+    "CREATE TABLE IF NOT EXISTS shares(
+        file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        owner_name TEXT NOT NULL DEFAULT '',
+        shared_at INTEGER NOT NULL
+    )",
+    // Who opened a shared file, through which token, for "Shared with you".
+    "CREATE TABLE IF NOT EXISTS share_access(
+        file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        token TEXT NOT NULL,
+        opened_at INTEGER NOT NULL,
+        PRIMARY KEY(file_id, user_id)
+    )",
+    "CREATE INDEX IF NOT EXISTS share_access_by_user ON share_access(user_id, opened_at)",
     // Docs images kept as uploads. LOKI can't list an app's uploads, so the
     // daily cleanup finds unused ones here.
     "CREATE TABLE IF NOT EXISTS images(

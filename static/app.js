@@ -30,3 +30,19 @@ for (const time of document.querySelectorAll("time[data-ms]")) {
   time.dateTime = date.toISOString();
   time.textContent = date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
+
+// Buttons with data-copy="ID" copy that input's value.
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-copy]");
+  if (!button) return;
+  const input = document.getElementById(button.dataset.copy);
+  try {
+    await navigator.clipboard.writeText(input.value);
+  } catch (_) {
+    input.select();
+    document.execCommand("copy");
+  }
+  const label = button.textContent;
+  button.textContent = "Copied";
+  setTimeout(() => { button.textContent = label; }, 1500);
+});

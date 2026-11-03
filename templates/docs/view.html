@@ -2,18 +2,18 @@
 {% block title %}{{ title }}{% endblock %}
 {% block body_class %}view-page{% endblock %}
 {% block head %}<link rel="stylesheet" href="/static/docs.css"><script src="/static/app.js" defer></script>{% endblock %}
-{% block appbar %}<span class="view-title">{{ title }}</span><span class="muted view-detail">{{ detail }}</span>{% endblock %}
+{% block appbar %}<span class="view-title">{{ title }}</span><span class="muted view-detail">{{ detail }}</span>{% if !shared.is_empty() %}<span class="badge shared-label">{{ shared }}</span>{% endif %}{% endblock %}
 {% block main %}
 {% include "version-banner.html" %}
 <div class="view-actions">
-  {% if version.is_none() %}
+  {% if version.is_none() && can_edit %}
   <a class="btn primary" href="/docs/{{ id }}">Edit</a>
   {% endif %}
   <button type="button" data-print>Print</button>
   {% if version.is_none() %}
   <a class="btn" href="/docs/{{ id }}/export.md">Markdown</a>
   <a class="btn" href="/docs/{{ id }}/export.html">HTML</a>
-  <a class="btn subtle" href="/files/{{ id }}/versions">Version history</a>
+  {% if owner %}<a class="btn subtle" href="/files/{{ id }}/versions">Version history</a>{% endif %}
   {% endif %}
 </div>
 <div class="canvas">

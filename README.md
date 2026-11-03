@@ -19,6 +19,15 @@ always before a restore. Each file keeps its latest 30 versions, dropping the
 oldest once they pass 4 MB together. You can open any version read-only and
 restore it; restoring keeps the current content as a version too.
 
+**Sharing by link** (**Share** in an editor, or a file's menu): LOKI gives apps
+no list of people, so an owner shares with everyone who has access to Office
+Suite and has the link, to view or to edit. Opening the link lists the file
+under **Shared with you** on that person's home page. Editors change the content
+and title; only the owner can trash, rename from the list, share or restore
+versions. **Make a new link** cuts off everyone who came in through the old
+one, and so does turning sharing off. Images in a shared document load for
+anyone who can open it.
+
 **Daily cleanup** (`src/cleanup.rs`), a job LOKI runs once a day: it deletes
 files that have been in the trash for 30 days, with their versions, and then
 Docs images that no file or saved version uses. Images are recorded when
@@ -31,6 +40,7 @@ first, so one added just before a save is never lost.
 src/lib.rs        router, health check, home page, static files
 src/files.rs      the shared files table: lists, search, trash, rename, copy,
                   versioned saves and version history
+src/sharing.rs    sharing by link: settings, /shared/{token}, "Shared with you"
 src/cleanup.rs    the daily job: expired trash and unused images
 src/schema.rs     tables, created by the health check
 src/ui/           page chrome (Shell, Tool), security headers, helpers

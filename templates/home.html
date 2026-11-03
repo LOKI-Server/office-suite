@@ -26,6 +26,28 @@
       {% endfor %}
     </ul>
   </section>
+  {% if !shared.is_empty() %}
+  <section aria-labelledby="shared">
+    <h2 id="shared" class="section-title">Shared with you</h2>
+    <ul class="items">
+      {% for row in shared %}
+      <li class="item">
+        <a class="item-main" href="{{ row.href }}">
+          <span class="item-icon">{% if row.icon == "sheet" %}{% include "icons/sheet.svg" %}{% else %}{% include "icons/doc.svg" %}{% endif %}</span>
+          <span class="item-text">
+            <span class="item-title">{{ row.title }}</span>
+            <span class="item-detail">{{ row.detail }}</span>
+          </span>
+        </a>
+        <form class="item-actions" method="post" action="/shared/{{ row.id }}/forget">
+          <input type="hidden" name="csrf_token" value="{{ shell.csrf }}">
+          <button class="subtle" title="Remove from this list">Remove</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
   <section aria-labelledby="recent">
     <h2 id="recent" class="section-title">{% if query.is_empty() %}Recent{% else %}Results for “{{ query }}”{% endif %}</h2>
     {% if rows.is_empty() %}
@@ -41,7 +63,7 @@
         <a class="item-main" href="{{ row.href }}">
           <span class="item-icon">{% if row.icon == "sheet" %}{% include "icons/sheet.svg" %}{% else %}{% include "icons/doc.svg" %}{% endif %}</span>
           <span class="item-text">
-            <span class="item-title">{{ row.title }}</span>
+            <span class="item-title">{{ row.title }}{% if row.shared %} <span class="badge">Shared</span>{% endif %}</span>
             <span class="item-detail">{% if row.excerpt.is_empty() %}{{ row.empty }}{% else %}{{ row.excerpt }}{% endif %}</span>
           </span>
         </a>
